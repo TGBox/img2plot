@@ -1,0 +1,78 @@
+"""
+Configuration parameters for the img2plot vectorizer and line generator.
+"""
+
+from __future__ import annotations
+import json
+from dataclasses import dataclass, asdict, field
+from typing import Any, Dict
+
+
+@dataclass
+class PlotParameters:
+    """Dataclass holding all customizable parameters for image vectorization."""
+
+    # File paths
+    input_path: str = ""
+    output_path: str = ""
+
+    # Preview and processing optimization
+    preview_max_dim: int = 800  # Downsample max dimension for fast live preview (0 = full resolution)
+
+    # Preprocessing
+    use_clahe: bool = True
+    clahe_kernel_size: int = 32
+    clahe_clip_limit: float = 0.01
+    use_gaussian_blur: bool = True
+    gaussian_kernel_size: float = 1.0
+
+    # Line tracing & edge detection
+    termination_ratio: float = 0.2857  # ~ 1.0 / 3.5
+    line_continue_thresh: float = 0.01
+    min_line_length: int = 21
+    max_curve_angle_deg: float = 20.0
+    lpf_atk: float = 0.05
+    max_iterations: int = 20000
+
+    # Line style & curve fitting
+    line_mode: str = "straight"  # "straight" or "bezier"
+    bezier_smoothness: float = 0.35  # Tangent smoothing strength for organic Bezier curves
+    curve_sample_step: int = 2  # Step size for picking points along tracked edges
+
+    # Hatching (Schraffur für dunkle Flächen)
+    use_hatching: bool = False
+    hatching_threshold: float = 0.35  # Grayscale brightness threshold (0.0=black, 1.0=white)
+    hatching_spacing: int = 10  # Pixel spacing between hatching lines
+    hatching_angle_deg: float = 45.0  # Angle of hatching lines
+    cross_hatch: bool = False  # Add a second orthogonal pass for deep shadows
+    hatching_min_length: int = 6  # Minimum length of hatching strokes
+
+    # Export & physical page setup
+    stroke_color: str = "#1a1a1a"
+    stroke_width_mm: float = 0.35
+    page_format: str = "Original"  # "Original", "A4", "A3", "Letter", "Custom"
+    page_width_mm: float = 210.0
+    page_height_mm: float = 297.0
+    margin_mm: float = 10.0
+    sort_paths: bool = True  # TSP/Nearest-neighbor sort to minimize pen-up movements
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert parameters to a dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> PlotParameters:
+        """Create PlotParameters instance from a dictionary, ignoring unknown keys."""
+        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
+
+    def to_json(self, indent: int = 2) -> str:
+        """Serialize parameters to JSON string."""
+        return json.dumps(self.to_dict(), indent=indent)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> PlotParameters:
+        """Deserialize parameters from JSON string."""
+        data = json.loads(json_str)
+        return cls.from_dict(data)

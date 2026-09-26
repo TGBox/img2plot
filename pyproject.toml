@@ -1,0 +1,29 @@
+[project]
+name = "img2plot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Daniel Rösch", email = "droesch91@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "numpy>=2.5.3",
+    "pillow>=12.3.0",
+    "pyside6>=6.11.2",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
+    "svgwrite>=1.4.3",
+]
+
+[project.scripts]
+img2plot = "img2plot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
