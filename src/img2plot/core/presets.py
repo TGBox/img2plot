@@ -1,5 +1,6 @@
 """
 Predefined and user-customizable presets for img2plot.
+Provides persistence for custom user presets in ~/.img2plot/presets.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         gaussian_kernel_size=1.0,
         line_mode="straight",
         use_hatching=False,
+        sort_paths=False,
     ),
     "Feine Details": PlotParameters(
         termination_ratio=0.18,
@@ -36,6 +38,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         line_mode="bezier",
         bezier_smoothness=0.25,
         use_hatching=False,
+        sort_paths=False,
     ),
     "Künstlerische Skizze": PlotParameters(
         termination_ratio=0.24,
@@ -50,6 +53,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         line_mode="bezier",
         bezier_smoothness=0.45,
         use_hatching=False,
+        sort_paths=False,
     ),
     "Starke Konturen": PlotParameters(
         termination_ratio=0.38,
@@ -62,6 +66,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         gaussian_kernel_size=1.5,
         line_mode="straight",
         use_hatching=False,
+        sort_paths=False,
     ),
     "Klassische Gravur (Schraffur)": PlotParameters(
         termination_ratio=0.25,
@@ -83,6 +88,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         hatching_angle_deg=45.0,
         cross_hatch=True,
         hatch_wobble=0.15,
+        sort_paths=False,
     ),
     "Schnell-Entwurf": PlotParameters(
         termination_ratio=0.45,
@@ -96,8 +102,68 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         gaussian_kernel_size=1.0,
         line_mode="straight",
         use_hatching=False,
+        sort_paths=False,
     ),
 }
+
+
+def get_user_presets_dir() -> str:
+    """Return the directory path where user presets are stored."""
+    base_dir = os.path.join(os.path.expanduser("~"), ".img2plot", "presets")
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
+
+def list_user_presets() -> Dict[str, PlotParameters]:
+    """Scan and load all custom presets saved by the user."""
+    presets_dir = get_user_presets_dir()
+    user_presets: Dict[str, PlotParameters] = {}
+
+    if not os.path.isdir(presets_dir):
+        return user_presets
+
+    for fname in sorted(os.listdir(presets_dir)):
+        if fname.endswith(".json"):
+            name = os.path.splitext(fname)[0]
+            fpath = os.path.join(presets_dir, fname)
+            try:
+                user_presets[name] = load_preset_file(fpath)
+            except Exception:
+                pass
+
+    return user_presets
+
+
+def get_all_presets() -> Dict[str, PlotParameters]:
+    """Return a dictionary of all available presets (default + user saved)."""
+    merged = dict(DEFAULT_PRESETS)
+    merged.update(list_user_presets())
+    return merged
+
+
+def save_user_preset(name: str, params: PlotParameters) -> str:
+    """Save parameters as a user preset with the specified name."""
+    safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-")).strip()
+    if not safe_name:
+        safe_name = "Benutzerdefiniert"
+
+    presets_dir = get_user_presets_dir()
+    fpath = os.path.join(presets_dir, f"{safe_name}.json")
+    save_preset_file(params, fpath)
+    return safe_name
+
+
+def delete_user_preset(name: str) -> bool:
+    """Delete a user preset if it exists."""
+    presets_dir = get_user_presets_dir()
+    fpath = os.path.join(presets_dir, f"{name}.json")
+    if os.path.isfile(fpath):
+        try:
+            os.remove(fpath)
+            return True
+        except Exception:
+            return False
+    return False
 
 
 def load_preset_file(file_path: str) -> PlotParameters:

@@ -1,12 +1,13 @@
 """
 Sidebar widget containing all parameter controls, file explorers, presets, and statistics.
+Includes ClickableSlider for generous mouse hit areas and full custom preset management.
 """
 
 from __future__ import annotations
 import os
 from typing import Optional, Callable
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -24,16 +25,72 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QColorDialog,
     QMessageBox,
-    QFrame,
+    QInputDialog,
+    QStyle,
+    QStyleOptionSlider,
 )
 
 from ..core.parameters import PlotParameters
-from ..core.presets import DEFAULT_PRESETS, load_preset_file, save_preset_file
+from ..core.presets import (
+    DEFAULT_PRESETS,
+    get_all_presets,
+    list_user_presets,
+    save_user_preset,
+    delete_user_preset,
+    load_preset_file,
+    save_preset_file,
+)
 from ..core.engine import PlotStats
 
 
+class ClickableSlider(QSlider):
+    """
+    QSlider with direct click-to-value snapping across the entire widget height,
+    eliminating accidental misses when clicking slightly above or below the groove.
+    """
+
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(orientation, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            val = self._pixel_to_val(event.position().x())
+            self.setValue(val)
+            self.setSliderDown(True)
+            self.sliderMoved.emit(val)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            val = self._pixel_to_val(event.position().x())
+            self.setValue(val)
+            self.sliderMoved.emit(val)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setSliderDown(False)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def _pixel_to_val(self, x: float) -> int:
+        handle_w = 24
+        slider_len = max(1.0, float(self.width() - handle_w))
+        pos = max(0.0, min(slider_len, x - handle_w / 2.0))
+        fraction = pos / slider_len
+        if self.invertedAppearance():
+            fraction = 1.0 - fraction
+        return int(round(self.minimum() + fraction * (self.maximum() - self.minimum())))
+
+
 class SliderRow(QWidget):
-    """Reusable widget combining a label, a slider, and a formatted numeric value readout."""
+    """Reusable widget combining a label, an accessible slider, and a formatted numeric value readout."""
 
     sig_value_changed = Signal(float)
 
@@ -65,15 +122,15 @@ class SliderRow(QWidget):
         self.lbl_title = QLabel(title)
         self.lbl_title.setStyleSheet("color: #d4d4d8; font-weight: 500;")
         self.lbl_val = QLabel()
-        self.lbl_val.setStyleSheet("color: #38bdf8; font-weight: bold; min-width: 45px; text-align: right;")
+        self.lbl_val.setStyleSheet("color: #38bdf8; font-weight: bold; min-width: 50px;")
         self.lbl_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         h_layout.addWidget(self.lbl_title)
         h_layout.addWidget(self.lbl_val)
         layout.addLayout(h_layout)
 
-        # Slider
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        # Large Clickable Slider
+        self.slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.slider_steps = int(round((max_val - min_val) / step))
         self.slider.setRange(0, self.slider_steps)
         self.slider.valueChanged.connect(self._on_slider_changed)
@@ -82,7 +139,34 @@ class SliderRow(QWidget):
         if tooltip:
             self.setToolTip(tooltip)
 
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.set_value(default_val)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            slider_x = self.slider.mapFrom(self, event.position().toPoint()).x()
+            val = self.slider._pixel_to_val(slider_x)
+            self.slider.setValue(val)
+            self.slider.setSliderDown(True)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            slider_x = self.slider.mapFrom(self, event.position().toPoint()).x()
+            val = self.slider._pixel_to_val(slider_x)
+            self.slider.setValue(val)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.slider.setSliderDown(False)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
     def _on_slider_changed(self, step_idx: int) -> None:
         val = self.min_val + step_idx * self.step
@@ -124,7 +208,7 @@ class SidebarWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(360)
-        self.setMaximumWidth(440)
+        self.setMaximumWidth(450)
 
         # Internal current parameters
         self.params = PlotParameters()
@@ -156,6 +240,8 @@ class SidebarWidget(QWidget):
         self.layout_content.addStretch()
         scroll_area.setWidget(content)
         main_layout.addWidget(scroll_area)
+
+        self._refresh_presets_dropdown()
 
     # -------------------------------------------------------------------------
     # UI Sections
@@ -207,22 +293,38 @@ class SidebarWidget(QWidget):
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
 
+        layout.addWidget(QLabel("Gespeicherte Profile:"))
         self.combo_presets = QComboBox()
-        self.combo_presets.addItems(list(DEFAULT_PRESETS.keys()))
         self.combo_presets.currentTextChanged.connect(self._on_preset_selected)
         layout.addWidget(self.combo_presets)
 
         h_btn = QHBoxLayout()
-        self.btn_load_preset = QPushButton("Laden...")
-        self.btn_load_preset.clicked.connect(self._load_preset_dialog)
-        self.btn_save_preset = QPushButton("Speichern...")
-        self.btn_save_preset.clicked.connect(self._save_preset_dialog)
+        self.btn_save_user_preset = QPushButton("Preset speichern...")
+        self.btn_save_user_preset.setToolTip("Aktuelle Reglerwerte als eigenes Preset speichern.")
+        self.btn_save_user_preset.clicked.connect(self._save_user_preset_dialog)
+
+        self.btn_delete_preset = QPushButton("Löschen")
+        self.btn_delete_preset.setToolTip("Aktuell ausgewähltes eigenes Preset löschen.")
+        self.btn_delete_preset.clicked.connect(self._delete_current_preset)
+
         self.btn_reset_preset = QPushButton("Zurücksetzen")
+        self.btn_reset_preset.setToolTip("Alle Regler auf den Standard zurücksetzen.")
         self.btn_reset_preset.clicked.connect(self._reset_to_default)
-        h_btn.addWidget(self.btn_load_preset)
-        h_btn.addWidget(self.btn_save_preset)
+
+        h_btn.addWidget(self.btn_save_user_preset)
+        h_btn.addWidget(self.btn_delete_preset)
         h_btn.addWidget(self.btn_reset_preset)
         layout.addLayout(h_btn)
+
+        # Secondary row: file import/export
+        h_files = QHBoxLayout()
+        self.btn_import_json = QPushButton("JSON importieren...")
+        self.btn_import_json.clicked.connect(self._load_preset_dialog)
+        self.btn_export_json = QPushButton("JSON exportieren...")
+        self.btn_export_json.clicked.connect(self._save_preset_dialog)
+        h_files.addWidget(self.btn_import_json)
+        h_files.addWidget(self.btn_export_json)
+        layout.addLayout(h_files)
 
         self.layout_content.addWidget(box)
 
@@ -546,8 +648,13 @@ class SidebarWidget(QWidget):
         h_col.addWidget(self.btn_color)
         layout.addLayout(h_col)
 
+        # Wegoptimierung: standardmäßig deaktiviert für schnellste Vorschau!
         self.chk_tsp = QCheckBox("Plotter-Wegoptimierung (Leerwege minimieren)")
-        self.chk_tsp.setChecked(True)
+        self.chk_tsp.setChecked(False)
+        self.chk_tsp.setToolTip(
+            "Sortiert Striche zur Reduktion von Leerfahrten beim physischen Plotten.\n"
+            "Standardmäßig für schnelle Live-Vorschau deaktiviert."
+        )
         self.chk_tsp.stateChanged.connect(self._emit_param_change)
         layout.addWidget(self.chk_tsp)
 
@@ -679,7 +786,6 @@ class SidebarWidget(QWidget):
         self.lbl_stat_lines.setText(f"{stats.contour_strokes}")
         self.lbl_stat_hatch.setText(f"{stats.hatch_strokes}")
 
-        # Convert px to approximate meters assuming 96 DPI (~0.264583 mm / px)
         mm_per_px = 0.264583
         draw_m = (stats.total_length_px * mm_per_px) / 1000.0
         penup_m = (stats.pen_up_distance_px * mm_per_px) / 1000.0
@@ -697,6 +803,118 @@ class SidebarWidget(QWidget):
         self.btn_cancel.setEnabled(computing)
         if not computing:
             self.progress_bar.setValue(100)
+
+    # -------------------------------------------------------------------------
+    # Preset Management
+    # -------------------------------------------------------------------------
+
+    def _refresh_presets_dropdown(self, select_name: Optional[str] = None) -> None:
+        """Reload all presets into combo box."""
+        self.combo_presets.blockSignals(True)
+        current = select_name or self.combo_presets.currentText()
+        self.combo_presets.clear()
+
+        all_presets = get_all_presets()
+        for name in all_presets.keys():
+            self.combo_presets.addItem(name)
+
+        idx = self.combo_presets.findText(current)
+        if idx >= 0:
+            self.combo_presets.setCurrentIndex(idx)
+        else:
+            self.combo_presets.setCurrentIndex(0)
+
+        self._update_preset_delete_button_state()
+        self.combo_presets.blockSignals(False)
+
+    def _update_preset_delete_button_state(self) -> None:
+        """Enable delete button only for custom user presets."""
+        curr = self.combo_presets.currentText()
+        is_user_preset = curr not in DEFAULT_PRESETS
+        self.btn_delete_preset.setEnabled(is_user_preset)
+
+    def _on_preset_selected(self, preset_name: str) -> None:
+        all_presets = get_all_presets()
+        if preset_name in all_presets:
+            p = all_presets[preset_name]
+            p.input_path = self.edit_input.text().strip()
+            p.output_path = self.edit_output.text().strip()
+            self.apply_parameters(p)
+            self._update_preset_delete_button_state()
+            self._emit_param_change()
+
+    def _save_user_preset_dialog(self) -> None:
+        """Prompt user for a preset name and save parameters to disk."""
+        curr_text = self.combo_presets.currentText()
+        default_name = curr_text if curr_text not in DEFAULT_PRESETS else "Mein Preset"
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Preset speichern",
+            "Name für die neue Voreinstellung:",
+            QLineEdit.EchoMode.Normal,
+            default_name,
+        )
+        if ok and name.strip():
+            preset_name = name.strip()
+            params = self.get_current_parameters()
+            saved_name = save_user_preset(preset_name, params)
+            self._refresh_presets_dropdown(select_name=saved_name)
+            QMessageBox.information(
+                self,
+                "Preset gespeichert",
+                f"Die Voreinstellung '{saved_name}' wurde dauerhaft gespeichert.",
+            )
+
+    def _delete_current_preset(self) -> None:
+        """Delete currently selected user preset."""
+        curr = self.combo_presets.currentText()
+        if curr in DEFAULT_PRESETS:
+            QMessageBox.warning(self, "Hinweis", "Standard-Presets können nicht gelöscht werden.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Preset löschen",
+            f"Möchtest du das Preset '{curr}' wirklich löschen?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            delete_user_preset(curr)
+            self._refresh_presets_dropdown(select_name="Standard")
+            self._on_preset_selected("Standard")
+
+    def _load_preset_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "JSON-Preset importieren", "", "JSON (*.json)")
+        if path:
+            try:
+                p = load_preset_file(path)
+                p.input_path = self.edit_input.text().strip()
+                p.output_path = self.edit_output.text().strip()
+                self.apply_parameters(p)
+                # Also save to user presets so it's readily accessible
+                base_name = os.path.splitext(os.path.basename(path))[0]
+                save_user_preset(base_name, p)
+                self._refresh_presets_dropdown(select_name=base_name)
+                self._emit_param_change()
+                QMessageBox.information(self, "Import erfolgreich", f"Preset '{base_name}' importiert.")
+            except Exception as e:
+                QMessageBox.critical(self, "Fehler", f"Fehler beim Laden des Presets:\n{e}")
+
+    def _save_preset_dialog(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Preset als JSON exportieren", "mein_preset.json", "JSON (*.json)")
+        if path:
+            try:
+                curr_p = self.get_current_parameters()
+                save_preset_file(curr_p, path)
+                QMessageBox.information(self, "Export erfolgreich", f"Preset in '{os.path.basename(path)}' exportiert.")
+            except Exception as e:
+                QMessageBox.critical(self, "Fehler", f"Fehler beim Speichern des Presets:\n{e}")
+
+    def _reset_to_default(self) -> None:
+        self.combo_presets.setCurrentText("Standard")
+        self._on_preset_selected("Standard")
 
     # -------------------------------------------------------------------------
     # Event Handlers
@@ -720,7 +938,6 @@ class SidebarWidget(QWidget):
         )
         if file_path:
             self.edit_input.setText(file_path)
-            # Suggest default output path
             base, _ = os.path.splitext(file_path)
             self.edit_output.setText(base + "_plot.svg")
             self.sig_input_file_selected.emit(file_path)
@@ -749,39 +966,3 @@ class SidebarWidget(QWidget):
 
     def _on_hatching_toggled(self, state: int) -> None:
         self._emit_param_change()
-
-    def _on_preset_selected(self, preset_name: str) -> None:
-        if preset_name in DEFAULT_PRESETS:
-            p = DEFAULT_PRESETS[preset_name]
-            # Preserve current paths
-            p.input_path = self.edit_input.text().strip()
-            p.output_path = self.edit_output.text().strip()
-            self.apply_parameters(p)
-            self._emit_param_change()
-
-    def _load_preset_dialog(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Preset-Datei laden", "", "JSON (*.json)")
-        if path:
-            try:
-                p = load_preset_file(path)
-                p.input_path = self.edit_input.text().strip()
-                p.output_path = self.edit_output.text().strip()
-                self.apply_parameters(p)
-                self._emit_param_change()
-                QMessageBox.information(self, "Preset geladen", f"Voreinstellung erfolgreich aus '{os.path.basename(path)}' geladen.")
-            except Exception as e:
-                QMessageBox.critical(self, "Fehler", f"Fehler beim Laden des Presets:\n{e}")
-
-    def _save_preset_dialog(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Preset speichern", "mein_preset.json", "JSON (*.json)")
-        if path:
-            try:
-                curr_p = self.get_current_parameters()
-                save_preset_file(curr_p, path)
-                QMessageBox.information(self, "Preset gespeichert", f"Voreinstellung erfolgreich in '{os.path.basename(path)}' gespeichert.")
-            except Exception as e:
-                QMessageBox.critical(self, "Fehler", f"Fehler beim Speichern des Presets:\n{e}")
-
-    def _reset_to_default(self) -> None:
-        self.combo_presets.setCurrentText("Standard")
-        self._on_preset_selected("Standard")

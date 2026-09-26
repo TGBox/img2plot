@@ -70,37 +70,137 @@ QScrollArea {
 }
 
 QScrollBar:vertical {
-    border: none;
-    background: #18181b;
-    width: 10px;
-    margin: 0px;
+    border-left: 1px solid #27272a;
+    background: #141416;
+    width: 14px;
+    margin: 14px 0 14px 0;
 }
 
 QScrollBar::handle:vertical {
-    background: #3f3f46;
-    min-height: 20px;
-    border-radius: 5px;
+    background: #52525b;
+    border: 1px solid #71717a;
+    min-height: 36px;
+    border-radius: 4px;
+    margin: 1px 2px 1px 2px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #52525b;
+    background: #38bdf8;
+    border: 1px solid #0284c7;
 }
 
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+QScrollBar::handle:vertical:pressed {
+    background: #0ea5e9;
+    border: 1px solid #0369a1;
+}
+
+QScrollBar::sub-line:vertical {
+    border-left: 1px solid #27272a;
+    border-bottom: 1px solid #27272a;
+    background: #27272a;
+    height: 14px;
+    subcontrol-position: top;
+    subcontrol-origin: margin;
+}
+
+QScrollBar::sub-line:vertical:hover {
+    background: #3f3f46;
+}
+
+QScrollBar::add-line:vertical {
+    border-left: 1px solid #27272a;
+    border-top: 1px solid #27272a;
+    background: #27272a;
+    height: 14px;
+    subcontrol-position: bottom;
+    subcontrol-origin: margin;
+}
+
+QScrollBar::add-line:vertical:hover {
+    background: #3f3f46;
+}
+
+QScrollBar::up-arrow:vertical {
+    width: 0px;
     height: 0px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #a1a1aa;
+}
+
+QScrollBar::down-arrow:vertical {
+    width: 0px;
+    height: 0px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #a1a1aa;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: #141416;
 }
 
 QScrollBar:horizontal {
-    border: none;
-    background: #18181b;
-    height: 10px;
-    margin: 0px;
+    border-top: 1px solid #27272a;
+    background: #141416;
+    height: 14px;
+    margin: 0 14px 0 14px;
 }
 
 QScrollBar::handle:horizontal {
-    background: #3f3f46;
-    min-width: 20px;
-    border-radius: 5px;
+    background: #52525b;
+    border: 1px solid #71717a;
+    min-width: 36px;
+    border-radius: 4px;
+    margin: 2px 1px 2px 1px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #38bdf8;
+    border: 1px solid #0284c7;
+}
+
+QScrollBar::handle:horizontal:pressed {
+    background: #0ea5e9;
+    border: 1px solid #0369a1;
+}
+
+QScrollBar::sub-line:horizontal {
+    border-top: 1px solid #27272a;
+    border-right: 1px solid #27272a;
+    background: #27272a;
+    width: 14px;
+    subcontrol-position: left;
+    subcontrol-origin: margin;
+}
+
+QScrollBar::add-line:horizontal {
+    border-top: 1px solid #27272a;
+    border-left: 1px solid #27272a;
+    background: #27272a;
+    width: 14px;
+    subcontrol-position: right;
+    subcontrol-origin: margin;
+}
+
+QScrollBar::left-arrow:horizontal {
+    width: 0px;
+    height: 0px;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-right: 5px solid #a1a1aa;
+}
+
+QScrollBar::right-arrow:horizontal {
+    width: 0px;
+    height: 0px;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 5px solid #a1a1aa;
+}
+
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: #141416;
 }
 
 QGroupBox {
@@ -207,32 +307,41 @@ QComboBox QAbstractItemView {
     padding: 4px;
 }
 
+QSlider:horizontal {
+    min-height: 34px;
+    max-height: 38px;
+}
+
 QSlider::groove:horizontal {
-    border: none;
-    height: 4px;
-    background: #27272a;
-    border-radius: 2px;
+    border: 1px solid #3f3f46;
+    height: 8px;
+    background: #18181b;
+    border-radius: 4px;
 }
 
 QSlider::sub-page:horizontal {
     background: #38bdf8;
-    border-radius: 2px;
+    border-radius: 4px;
 }
 
 QSlider::handle:horizontal {
-    background: #f4f4f5;
-    border: 1px solid #38bdf8;
-    width: 14px;
-    height: 14px;
-    margin-top: -5px;
-    margin-bottom: -5px;
-    border-radius: 7px;
+    background: #ffffff;
+    border: 3px solid #0284c7;
+    width: 24px;
+    height: 24px;
+    margin-top: -8px;
+    margin-bottom: -8px;
+    border-radius: 12px;
 }
 
 QSlider::handle:horizontal:hover {
     background: #ffffff;
-    border-color: #60a5fa;
-    transform: scale(1.1);
+    border: 3px solid #38bdf8;
+}
+
+QSlider::handle:horizontal:pressed {
+    background: #e0f2fe;
+    border: 3px solid #0369a1;
 }
 
 QCheckBox {

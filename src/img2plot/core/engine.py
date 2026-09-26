@@ -431,7 +431,10 @@ class PlotEngine:
                 break
 
             iteration += 1
-            if iteration % 250 == 0:
+            if iteration % 50 == 0:
+                time.sleep(0.0001)  # Yield Python GIL to keep GUI thread completely fluid
+                if is_cancelled and is_cancelled():
+                    break
                 p_progress = 0.35 + 0.45 * (1.0 - (cmax - term_thresh) / max(1e-6, init_max_p - term_thresh))
                 update_progress(min(0.80, p_progress), f"Linien extrahieren ({len(paths)} Linien)...")
 
@@ -452,22 +455,8 @@ class PlotEngine:
             )
 
             if total_len < self.params.min_line_length or len(full_pts) < 2:
-                # Suppress the peak using neighbor mean
-                acc = 0.0
-                cnt = 0
-                if py + 1 < h:
-                    acc += mag[py + 1, px]
-                    cnt += 1
-                if px + 1 < w:
-                    acc += mag[py, px + 1]
-                    cnt += 1
-                if py - 1 >= 0:
-                    acc += mag[py - 1, px]
-                    cnt += 1
-                if px - 1 >= 0:
-                    acc += mag[py, px - 1]
-                    cnt += 1
-                mag[py, px] = acc / max(1, cnt)
+                # Suppress the failed peak neighborhood so argmax() does not get stuck in repetitive iterations
+                mag[max(0, py - 1) : min(h, py + 2), max(0, px - 1) : min(w, px + 2)] = 0.0
                 continue
 
             start_pt = full_pts[0]
@@ -527,6 +516,7 @@ class PlotEngine:
                 curve_strength=self.params.hatch_curve_strength,
                 wobble=self.params.hatch_wobble,
                 bezier_smoothness=self.params.bezier_smoothness,
+                is_cancelled=is_cancelled,
             )
             for hs in hatch_strokes:
                 paths.append(

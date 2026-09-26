@@ -114,3 +114,174 @@ def test_preview_widget_modes(qapp):
 
     preview.btn_fit.click()
     assert preview.canvas.zoom > 0
+
+
+def test_clickable_slider_and_slider_row_hit_area(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+    from img2plot.gui.sidebar import ClickableSlider, SliderRow
+
+    slider = ClickableSlider(Qt.Orientation.Horizontal)
+    slider.setRange(0, 100)
+    slider.setValue(10)
+    slider.resize(200, 34)
+
+    # Click on the right side of the slider
+    press_ev = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPointF(160, 17),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    slider.mousePressEvent(press_ev)
+    assert slider.value() > 60
+    assert slider.isSliderDown() is True
+
+    # Drag to the left side
+    move_ev = QMouseEvent(
+        QMouseEvent.Type.MouseMove,
+        QPointF(40, 17),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    slider.mouseMoveEvent(move_ev)
+    assert slider.value() < 30
+
+    release_ev = QMouseEvent(
+        QMouseEvent.Type.MouseButtonRelease,
+        QPointF(40, 17),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    slider.mouseReleaseEvent(release_ev)
+    assert slider.isSliderDown() is False
+
+    # Test SliderRow click forwarding (clicking above/below track)
+    row = SliderRow("Test Regler", min_val=0, max_val=100, default_val=10)
+    row.resize(250, 60)
+    row.show()
+
+    # Click at y=2 (above the slider groove in the row header)
+    row_click_ev = QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        QPointF(190, 2),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    row.mousePressEvent(row_click_ev)
+    assert row.get_value() > 60
+
+
+def test_zoom_retention_toggle(qapp):
+    from img2plot.gui.preview_widget import PreviewWidget
+    from img2plot.core.engine import EngineResult, PlotStats, StrokePath
+    import numpy as np
+
+    preview = PreviewWidget()
+    preview.resize(800, 600)
+    preview.show()
+    stroke = StrokePath(points=[(0.0, 0.0), (100.0, 100.0)])
+    gray = np.full((200, 200), 0.5, dtype=np.float32)
+    mag = np.full((200, 200), 0.2, dtype=np.float32)
+    res1 = EngineResult(
+        paths=[stroke],
+        width=200,
+        height=200,
+        preprocessed_gray=gray,
+        sobel_magnitude=mag,
+        stats=PlotStats(total_strokes=1),
+    )
+    res2 = EngineResult(
+        paths=[stroke],
+        width=200,
+        height=200,
+        preprocessed_gray=gray,
+        sobel_magnitude=mag,
+        stats=PlotStats(total_strokes=1),
+    )
+
+    # First load: initial fit
+    preview.set_result(res1)
+    # Manually set a custom zoom and pan
+    preview.canvas.zoom = 3.5
+    preview.canvas.pan_offset.setX(123.0)
+    preview.canvas.pan_offset.setY(456.0)
+
+    # 1. With chk_keep_zoom checked: zoom and pan are preserved across updates
+    preview.chk_keep_zoom.setChecked(True)
+    preview.set_result(res2)
+    assert preview.canvas.zoom == 3.5
+    assert preview.canvas.pan_offset.x() == 123.0
+    assert preview.canvas.pan_offset.y() == 456.0
+
+    # 2. With force_fit=True: resets to fit view even if chk_keep_zoom is True
+    preview.set_result(res2, force_fit=True)
+    assert preview.canvas.zoom != 3.5
+
+    # 3. With chk_keep_zoom unchecked: resets to fit view on every update
+    preview.canvas.zoom = 2.8
+    preview.chk_keep_zoom.setChecked(False)
+    preview.set_result(res2)
+    assert preview.canvas.zoom != 2.8
+
+
+def test_default_sort_paths_is_false(qapp):
+    from img2plot.core.parameters import PlotParameters
+    from img2plot.core.presets import DEFAULT_PRESETS
+    from img2plot.gui.sidebar import SidebarWidget
+
+    # Default PlotParameters
+    p = PlotParameters()
+    assert p.sort_paths is False
+
+    # Default presets
+    for name, preset_params in DEFAULT_PRESETS.items():
+        assert preset_params.sort_paths is False, f"Preset {name} has sort_paths=True"
+
+    # Sidebar checkbox
+    sidebar = SidebarWidget()
+    assert sidebar.chk_tsp.isChecked() is False
+
+
+def test_worker_async_preview_generation(qapp):
+    import numpy as np
+    from img2plot.core.parameters import PlotParameters
+    from img2plot.gui.worker import VectorizationWorker, WorkerTask, PreviewRenderData
+
+    img_data = np.full((120, 120, 3), 180, dtype=np.uint8)
+    img_data[30:90, 30:90] = 20  # dark square in center to trigger lines and hatching
+
+    params = PlotParameters(min_line_length=10, use_hatching=True, sort_paths=False)
+    worker = VectorizationWorker()
+    task = WorkerTask(
+        params=params,
+        image_input=img_data,
+        req_id=42,
+        is_preview=True,
+        paper_style="dark",
+        display_mode="vector",
+        overlay_opacity=0.7,
+    )
+
+    received_data = []
+
+    def on_finished(data, req_id):
+        received_data.append((data, req_id))
+
+    worker.sig_finished.connect(on_finished)
+    worker.run_once(task)
+
+    assert len(received_data) == 1
+    data, req_id = received_data[0]
+    assert req_id == 42
+    assert isinstance(data, PreviewRenderData)
+    assert data.result is not None
+    assert data.cached_rendered_img is not None
+    assert not data.cached_rendered_img.isNull()
+    assert not data.cached_vector_path.isEmpty() or not data.cached_hatch_path.isEmpty()
+
+

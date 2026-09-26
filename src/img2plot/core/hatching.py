@@ -6,7 +6,8 @@ to the underlying surface contours and luminance gradients.
 
 from __future__ import annotations
 import math
-from typing import List, Tuple, Optional
+import time
+from typing import List, Tuple, Optional, Callable
 import numpy as np
 import scipy.ndimage
 
@@ -140,6 +141,7 @@ def generate_hatching(
     curve_strength: float = 0.65,
     wobble: float = 0.0,
     bezier_smoothness: float = 0.35,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> List[HatchStroke]:
     """
     Generate hatching strokes across regions darker than the given threshold.
@@ -190,8 +192,12 @@ def generate_hatching(
             use_bezier=use_bezier,
             bezier_smoothness=bezier_smoothness,
             wobble=wobble,
+            is_cancelled=is_cancelled,
         )
     )
+
+    if is_cancelled and is_cancelled():
+        return strokes
 
     # --- Second Pass for Cross-Hatching ---
     if cross_hatch:
@@ -215,6 +221,7 @@ def generate_hatching(
                     use_bezier=use_bezier,
                     bezier_smoothness=bezier_smoothness,
                     wobble=wobble,
+                    is_cancelled=is_cancelled,
                 )
             )
 
@@ -231,6 +238,7 @@ def _trace_streamlines(
     use_bezier: bool,
     bezier_smoothness: float,
     wobble: float = 0.0,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> List[HatchStroke]:
     """
     Trace curved or straight streamlines through the mask guided by the flow field.
@@ -258,6 +266,10 @@ def _trace_streamlines(
     visited_mask = np.zeros((h, w), dtype=bool)
 
     for i in range(-half_lines, half_lines + 1):
+        if is_cancelled and is_cancelled():
+            break
+        if i % 15 == 0:
+            time.sleep(0.0001)
         offset = i * spacing
         bx = cx + offset * perp_x
         by = cy + offset * perp_y

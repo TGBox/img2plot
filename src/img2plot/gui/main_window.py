@@ -29,7 +29,7 @@ from ..core.exporter import export_svg, export_png
 from .theme import DARK_STYLESHEET
 from .sidebar import SidebarWidget
 from .preview_widget import PreviewWidget
-from .worker import VectorizationWorker
+from .worker import VectorizationWorker, PreviewRenderData
 
 
 class MainWindow(QMainWindow):
@@ -44,13 +44,21 @@ class MainWindow(QMainWindow):
         # State tracking
         self.current_image_path: str = ""
         self.current_result: Optional[EngineResult] = None
-        self.worker: Optional[VectorizationWorker] = None
         self.is_fullscreen: bool = False
+        self._force_fit_next: bool = True
+        self._current_req_id: int = 0
+
+        # Persistent background worker thread for non-blocking preview vectorization
+        self.worker = VectorizationWorker(parent=self)
+        self.worker.sig_progress.connect(self._on_worker_progress)
+        self.worker.sig_finished.connect(self._on_worker_finished)
+        self.worker.sig_error.connect(self._on_worker_error)
+        self.worker.start()
 
         # Debounce timer for smooth slider live-preview updates
         self.debounce_timer = QTimer(self)
         self.debounce_timer.setSingleShot(True)
-        self.debounce_timer.setInterval(400)
+        self.debounce_timer.setInterval(300)
         self.debounce_timer.timeout.connect(self._start_preview_calculation)
 
         # Central layout with QSplitter
@@ -156,6 +164,15 @@ class MainWindow(QMainWindow):
         act_100.triggered.connect(self.preview.canvas.reset_zoom)
         menu_view.addAction(act_100)
 
+        menu_view.addSeparator()
+
+        self.act_keep_zoom = QAction("Zoomstufe bei Neuberechnung beibehalten", self)
+        self.act_keep_zoom.setCheckable(True)
+        self.act_keep_zoom.setChecked(self.preview.chk_keep_zoom.isChecked())
+        self.act_keep_zoom.toggled.connect(self.preview.chk_keep_zoom.setChecked)
+        self.preview.chk_keep_zoom.toggled.connect(self.act_keep_zoom.setChecked)
+        menu_view.addAction(self.act_keep_zoom)
+
         # Menu: Hilfe
         menu_help = menubar.addMenu("Hilfe")
         act_about = QAction("Über img2plot", self)
@@ -254,6 +271,12 @@ class MainWindow(QMainWindow):
         else:
             super().keyPressEvent(event)
 
+    def closeEvent(self, event) -> None:
+        """Cleanly stop persistent worker thread on application exit."""
+        if self.worker:
+            self.worker.stop()
+        super().closeEvent(event)
+
     # -------------------------------------------------------------------------
     # Drag and Drop Support
     # -------------------------------------------------------------------------
@@ -303,6 +326,7 @@ class MainWindow(QMainWindow):
         self.sidebar.edit_output.setText(out_svg)
 
         self.statusBar().showMessage(f"Bild geladen: {os.path.basename(file_path)}")
+        self._force_fit_next = True
         self._start_preview_calculation()
 
     def _on_parameters_changed(self) -> None:
@@ -319,53 +343,58 @@ class MainWindow(QMainWindow):
         self._start_preview_calculation()
 
     def _on_cancel_requested(self) -> None:
-        if self.worker and self.worker.isRunning():
+        if self.worker:
             self.worker.cancel()
-            self.sidebar.set_progress(0.0, "Berechnung abgebrochen.")
-            self.sidebar.set_computing_state(False)
-            self.statusBar().showMessage("Berechnung abgebrochen.")
+        self.sidebar.set_progress(0.0, "Berechnung abgebrochen.")
+        self.sidebar.set_computing_state(False)
+        self.statusBar().showMessage("Berechnung abgebrochen.")
 
     def _start_preview_calculation(self) -> None:
-        """Launch background worker for vectorization."""
+        """Submit vectorization task to background worker without blocking the GUI."""
         if not self.current_image_path or not os.path.isfile(self.current_image_path):
             return
 
-        # Cancel any active running worker
-        if self.worker and self.worker.isRunning():
-            self.worker.cancel()
-            self.worker.wait(500)
-
         params = self.sidebar.get_current_parameters()
         params.input_path = self.current_image_path
+
+        self._current_req_id += 1
+        req_id = self._current_req_id
 
         self.sidebar.set_computing_state(True)
         self.sidebar.set_progress(0.05, "Vorbereitung...")
         self.statusBar().showMessage("Vektorisierung läuft im Hintergrund...")
 
-        self.worker = VectorizationWorker(
+        self.worker.submit_task(
             params=params,
             image_input=self.current_image_path,
+            req_id=req_id,
             is_preview=True,
-            parent=self,
+            paper_style=self.preview.canvas.paper_style,
+            display_mode=self.preview.canvas.display_mode,
+            overlay_opacity=self.preview.canvas.overlay_opacity,
         )
-        self.worker.sig_progress.connect(self._on_worker_progress)
-        self.worker.sig_finished.connect(self._on_worker_finished)
-        self.worker.sig_error.connect(self._on_worker_error)
-        self.worker.start()
 
     def _on_worker_progress(self, fraction: float, msg: str) -> None:
         self.sidebar.set_progress(fraction, msg)
 
-    def _on_worker_finished(self, result: EngineResult) -> None:
-        self.current_result = result
+    def _on_worker_finished(self, data: PreviewRenderData, req_id: int) -> None:
+        if req_id != self._current_req_id:
+            # Stale result from an older calculation that was cancelled
+            return
+
+        self.current_result = data.result
         self.sidebar.set_computing_state(False)
-        self.sidebar.update_statistics(result.stats)
-        self.preview.set_result(result)
+        self.sidebar.update_statistics(data.result.stats)
+        force_fit = getattr(self, "_force_fit_next", False)
+        self.preview.set_preview_data(data, force_fit=force_fit)
+        self._force_fit_next = False
         self.statusBar().showMessage(
-            f"Fertig: {result.stats.total_strokes} Pfade in {result.stats.elapsed_time_sec:.2f}s generiert."
+            f"Fertig: {data.result.stats.total_strokes} Pfade in {data.result.stats.elapsed_time_sec:.2f}s generiert."
         )
 
-    def _on_worker_error(self, err_msg: str) -> None:
+    def _on_worker_error(self, err_msg: str, req_id: int) -> None:
+        if req_id != self._current_req_id:
+            return
         self.sidebar.set_computing_state(False)
         self.sidebar.set_progress(0.0, "Fehler bei der Berechnung")
         self.statusBar().showMessage("Fehler bei der Vektorisierung.")

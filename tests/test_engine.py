@@ -42,6 +42,28 @@ def test_presets_io():
         assert loaded.bezier_smoothness == p.bezier_smoothness
 
 
+def test_user_presets_persistence(monkeypatch, tmp_path):
+    from img2plot.core import presets
+    monkeypatch.setattr(presets, "get_user_presets_dir", lambda: str(tmp_path))
+
+    p = PlotParameters(min_line_length=42, line_mode="bezier")
+    saved_name = presets.save_user_preset("Mein Test Profil", p)
+    assert saved_name == "Mein Test Profil"
+
+    user_list = presets.list_user_presets()
+    assert "Mein Test Profil" in user_list
+    assert user_list["Mein Test Profil"].min_line_length == 42
+
+    all_presets = presets.get_all_presets()
+    assert "Mein Test Profil" in all_presets
+    assert "Standard" in all_presets
+
+    deleted = presets.delete_user_preset("Mein Test Profil")
+    assert deleted is True
+    assert "Mein Test Profil" not in presets.list_user_presets()
+
+
+
 def test_bezier_fitting():
     # Test with colinear points
     points = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]

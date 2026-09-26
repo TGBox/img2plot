@@ -1,6 +1,7 @@
 """
 Interactive preview canvas for img2plot.
 Supports panning, zooming, vector path rendering, Sobel edge maps, and image overlay with opacity.
+Includes dual-mode hardware-like raster caching during continuous zoom/pan interaction for ultra-smooth 60 FPS performance.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from typing import Optional, List
 import numpy as np
 from PIL import Image
 
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QTimer
 from PySide6.QtGui import (
     QPainter,
     QPen,
@@ -25,15 +26,16 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QTabWidget,
     QLabel,
     QSlider,
     QPushButton,
     QComboBox,
+    QCheckBox,
     QFrame,
 )
 
 from ..core.engine import EngineResult, StrokePath
+from .worker import PreviewRenderData
 
 
 class CanvasView(QWidget):
@@ -51,6 +53,7 @@ class CanvasView(QWidget):
         self.zoom: float = 1.0
         self.pan_offset: QPointF = QPointF(0.0, 0.0)
         self.is_panning: bool = False
+        self.is_zooming: bool = False
         self.last_mouse_pos: QPointF = QPointF(0.0, 0.0)
 
         # Data to render
@@ -64,9 +67,30 @@ class CanvasView(QWidget):
         self.pixmap_sobel: Optional[QPixmap] = None
         self.cached_vector_path: Optional[QPainterPath] = None
         self.cached_hatch_path: Optional[QPainterPath] = None
+        self.cached_rendered_pixmap: Optional[QPixmap] = None
 
-    def set_result(self, result: EngineResult) -> None:
-        """Update canvas with a new vectorization result."""
+        # Zoom debounce timer for interactive performance
+        self.zoom_debounce_timer = QTimer(self)
+        self.zoom_debounce_timer.setSingleShot(True)
+        self.zoom_debounce_timer.setInterval(120)
+        self.zoom_debounce_timer.timeout.connect(self._on_zoom_settled)
+
+    def set_preview_data(self, data: PreviewRenderData) -> None:
+        """Instantly apply pre-computed background worker assets without any GUI lag."""
+        self.result = data.result
+        self.cached_vector_path = data.cached_vector_path
+        self.cached_hatch_path = data.cached_hatch_path
+        self.pixmap_preprocess = QPixmap.fromImage(data.pixmap_preprocess_img) if data.pixmap_preprocess_img else None
+        self.pixmap_sobel = QPixmap.fromImage(data.pixmap_sobel_img) if data.pixmap_sobel_img else None
+        self.cached_rendered_pixmap = QPixmap.fromImage(data.cached_rendered_img) if data.cached_rendered_img else None
+        self.update()
+
+    def set_result(self, result: EngineResult | PreviewRenderData) -> None:
+        """Update canvas with a new vectorization result (with synchronous fallback)."""
+        if isinstance(result, PreviewRenderData):
+            self.set_preview_data(result)
+            return
+
         self.result = result
 
         # Convert preprocessed numpy array to QPixmap
@@ -103,7 +127,53 @@ class CanvasView(QWidget):
 
         self.cached_vector_path = v_path
         self.cached_hatch_path = h_path
+
+        # Update high-performance raster cache
+        self._update_rendered_cache()
         self.update()
+
+    def _update_rendered_cache(self) -> None:
+        """Pre-render the current artwork onto a high-res raster cache for fast zoom/pan blitting."""
+        if not self.result or self.result.width <= 0 or self.result.height <= 0:
+            self.cached_rendered_pixmap = None
+            return
+
+        w, h = self.result.width, self.result.height
+        scale_factor = min(2.0, 2400.0 / max(w, h))
+        cache_w = max(1, int(round(w * scale_factor)))
+        cache_h = max(1, int(round(h * scale_factor)))
+        pix = QPixmap(cache_w, cache_h)
+
+        # Background color
+        bg_col = QColor("#ffffff")
+        if self.paper_style == "paper":
+            bg_col = QColor("#faf5eb")
+        elif self.paper_style == "dark":
+            bg_col = QColor("#18181b")
+
+        pix.fill(bg_col)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.scale(scale_factor, scale_factor)
+
+        img_rect = QRectF(0.0, 0.0, float(w), float(h))
+
+        if self.display_mode == "preprocess" and self.pixmap_preprocess:
+            painter.drawPixmap(img_rect.toRect(), self.pixmap_preprocess)
+        elif self.display_mode == "sobel" and self.pixmap_sobel:
+            painter.drawPixmap(img_rect.toRect(), self.pixmap_sobel)
+        elif self.display_mode == "overlay":
+            if self.pixmap_preprocess:
+                painter.drawPixmap(img_rect.toRect(), self.pixmap_preprocess)
+            painter.setOpacity(self.overlay_opacity)
+            self._render_vector_paths(painter, zoom=scale_factor)
+            painter.setOpacity(1.0)
+        else:  # "vector"
+            self._render_vector_paths(painter, zoom=scale_factor)
+
+        painter.end()
+        self.cached_rendered_pixmap = pix
 
     def fit_to_view(self) -> None:
         """Scale and center image within current widget bounds."""
@@ -142,18 +212,21 @@ class CanvasView(QWidget):
 
     def set_display_mode(self, mode: str) -> None:
         self.display_mode = mode
+        self._update_rendered_cache()
         self.update()
 
     def set_paper_style(self, style: str) -> None:
         self.paper_style = style
+        self._update_rendered_cache()
         self.update()
 
     def set_overlay_opacity(self, opacity: float) -> None:
         self.overlay_opacity = max(0.0, min(1.0, opacity))
+        self._update_rendered_cache()
         self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """Smooth zooming anchored at mouse cursor."""
+        """Smooth zooming anchored at mouse cursor with debounced high-quality rendering."""
         angle_delta = event.angleDelta().y()
         if angle_delta == 0:
             return
@@ -167,6 +240,15 @@ class CanvasView(QWidget):
         self.pan_offset = mouse_pos - (mouse_pos - self.pan_offset) * (new_zoom / old_zoom)
         self.zoom = new_zoom
         self.sig_zoom_changed.emit(self.zoom)
+
+        # Flag that we are interactively zooming: use fast raster blit
+        self.is_zooming = True
+        self.zoom_debounce_timer.start()
+        self.update()
+
+    def _on_zoom_settled(self) -> None:
+        """Fires 120ms after zooming stops to render full crisp vector paths."""
+        self.is_zooming = False
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -196,17 +278,17 @@ class CanvasView(QWidget):
         if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             self.is_panning = False
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        # Draw dark canvas background with subtle grid
+        # Draw dark canvas background
         self._draw_canvas_background(painter)
 
         if not self.result:
-            # Draw placeholder message
             painter.setPen(QColor("#71717a"))
             painter.drawText(
                 self.rect(),
@@ -224,33 +306,32 @@ class CanvasView(QWidget):
 
         img_rect = QRectF(0.0, 0.0, w, h)
 
-        # 1. Background of the artwork
-        bg_col = QColor("#ffffff")
-        if self.paper_style == "paper":
-            bg_col = QColor("#faf5eb")  # Warm cream sketchbook
-        elif self.paper_style == "dark":
-            bg_col = QColor("#18181b")  # Dark charcoal
+        # FAST INTERACTION MODE: During mouse wheel zoom or drag pan,
+        # blit pre-rendered cache for instant 60 FPS performance!
+        if (self.is_zooming or self.is_panning) and self.cached_rendered_pixmap is not None:
+            painter.drawPixmap(img_rect.toRect(), self.cached_rendered_pixmap)
+        else:
+            # SHARP MODE: Render full vector quality at current zoom level
+            bg_col = QColor("#ffffff")
+            if self.paper_style == "paper":
+                bg_col = QColor("#faf5eb")
+            elif self.paper_style == "dark":
+                bg_col = QColor("#18181b")
 
-        painter.fillRect(img_rect, bg_col)
+            painter.fillRect(img_rect, bg_col)
 
-        # 2. Render depending on selected display mode
-        if self.display_mode == "preprocess" and self.pixmap_preprocess:
-            painter.drawPixmap(img_rect.toRect(), self.pixmap_preprocess)
-
-        elif self.display_mode == "sobel" and self.pixmap_sobel:
-            painter.drawPixmap(img_rect.toRect(), self.pixmap_sobel)
-
-        elif self.display_mode == "overlay":
-            # Draw image first
-            if self.pixmap_preprocess:
+            if self.display_mode == "preprocess" and self.pixmap_preprocess:
                 painter.drawPixmap(img_rect.toRect(), self.pixmap_preprocess)
-            # Overlay vector lines with opacity
-            painter.setOpacity(self.overlay_opacity)
-            self._render_vector_paths(painter)
-            painter.setOpacity(1.0)
-
-        else:  # "vector"
-            self._render_vector_paths(painter)
+            elif self.display_mode == "sobel" and self.pixmap_sobel:
+                painter.drawPixmap(img_rect.toRect(), self.pixmap_sobel)
+            elif self.display_mode == "overlay":
+                if self.pixmap_preprocess:
+                    painter.drawPixmap(img_rect.toRect(), self.pixmap_preprocess)
+                painter.setOpacity(self.overlay_opacity)
+                self._render_vector_paths(painter, zoom=self.zoom)
+                painter.setOpacity(1.0)
+            else:  # "vector"
+                self._render_vector_paths(painter, zoom=self.zoom)
 
         # Draw neat border around the artwork sheet
         border_pen = QPen(QColor("#3f3f46"), 1.0 / self.zoom)
@@ -260,7 +341,7 @@ class CanvasView(QWidget):
 
         painter.restore()
 
-    def _render_vector_paths(self, painter: QPainter) -> None:
+    def _render_vector_paths(self, painter: QPainter, zoom: float = 1.0) -> None:
         """Render contours and hatching paths with appropriate pen colors and widths."""
         stroke_color = QColor("#111111")
         if self.paper_style == "dark" and self.display_mode == "vector":
@@ -269,7 +350,7 @@ class CanvasView(QWidget):
         # 1. Render hatching (slightly thinner stroke)
         if self.cached_hatch_path:
             hatch_pen = QPen(stroke_color)
-            hatch_pen.setWidthF(max(0.6, 0.8 / math.sqrt(self.zoom)))
+            hatch_pen.setWidthF(max(0.6, 0.8 / math.sqrt(max(0.1, zoom))))
             hatch_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             hatch_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(hatch_pen)
@@ -278,14 +359,14 @@ class CanvasView(QWidget):
         # 2. Render contours
         if self.cached_vector_path:
             vector_pen = QPen(stroke_color)
-            vector_pen.setWidthF(max(0.8, 1.1 / math.sqrt(self.zoom)))
+            vector_pen.setWidthF(max(0.8, 1.1 / math.sqrt(max(0.1, zoom))))
             vector_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             vector_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(vector_pen)
             painter.drawPath(self.cached_vector_path)
 
     def _draw_canvas_background(self, painter: QPainter) -> None:
-        """Draw viewport backdrop with subtle dots or grid pattern."""
+        """Draw viewport backdrop."""
         painter.fillRect(self.rect(), QColor("#09090b"))
 
 
@@ -336,6 +417,14 @@ class PreviewWidget(QWidget):
         self.combo_paper.currentIndexChanged.connect(self._on_paper_changed)
         h_layout.addWidget(self.combo_paper)
 
+        # Checkbox: Zoomstufe beibehalten
+        self.chk_keep_zoom = QCheckBox("Zoom beibehalten")
+        self.chk_keep_zoom.setChecked(True)
+        self.chk_keep_zoom.setToolTip(
+            "Behält die aktuelle Zoomstufe und den Bildausschnitt bei Neuberechnungen bei."
+        )
+        h_layout.addWidget(self.chk_keep_zoom)
+
         h_layout.addStretch()
 
         # Zoom buttons & label
@@ -372,10 +461,25 @@ class PreviewWidget(QWidget):
         f_layout.addStretch()
         layout.addWidget(footer_bar)
 
-    def set_result(self, result: EngineResult) -> None:
-        """Forward vectorization result to canvas."""
+    def set_preview_data(self, data: PreviewRenderData, force_fit: bool = False) -> None:
+        """Forward background-computed preview data to canvas, preserving zoom if requested."""
+        is_first_load = self.canvas.result is None
+        self.canvas.set_preview_data(data)
+
+        if force_fit or is_first_load or (not self.chk_keep_zoom.isChecked()):
+            self.canvas.fit_to_view()
+
+    def set_result(self, result: EngineResult | PreviewRenderData, force_fit: bool = False) -> None:
+        """Forward vectorization result to canvas, preserving zoom if requested."""
+        if isinstance(result, PreviewRenderData):
+            self.set_preview_data(result, force_fit=force_fit)
+            return
+
+        is_first_load = self.canvas.result is None
         self.canvas.set_result(result)
-        self.canvas.fit_to_view()
+
+        if force_fit or is_first_load or (not self.chk_keep_zoom.isChecked()):
+            self.canvas.fit_to_view()
 
     def _on_mode_changed(self, index: int) -> None:
         modes = ["vector", "preprocess", "sobel", "overlay"]
