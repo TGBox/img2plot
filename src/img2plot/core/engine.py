@@ -4,6 +4,7 @@ Transforms raster images into artistic line drawings and vector paths.
 """
 
 from __future__ import annotations
+import os
 import math
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,9 @@ from .bezier import Point, CubicSegment, fit_cubic_spline, segments_to_svg_path,
 from .hatching import generate_hatching
 
 Point2D = Tuple[float, float]
+
+# Bounded single-entry cache for expensive preprocessing and gradient fields
+_PREPROCESS_CACHE: dict = {}
 
 
 @dataclass
@@ -77,34 +81,6 @@ class EngineResult:
     stats: PlotStats
 
 
-def bilinear_interpolate(img: np.ndarray, x: float, y: float) -> float:
-    """Sample continuous coordinates on a 2D float image with bilinear interpolation."""
-    h, w = img.shape
-    x_floor = int(math.floor(x))
-    y_floor = int(math.floor(y))
-    x_ceil = int(math.ceil(x))
-    y_ceil = int(math.ceil(y))
-
-    # Clamp bounds
-    x_floor = max(0, min(w - 1, x_floor))
-    x_ceil = max(0, min(w - 1, x_ceil))
-    y_floor = max(0, min(h - 1, y_floor))
-    y_ceil = max(0, min(h - 1, y_ceil))
-
-    x_float = x - math.floor(x)
-    y_float = y - math.floor(y)
-
-    top_left = img[y_floor, x_floor]
-    top_right = img[y_floor, x_ceil]
-    bottom_left = img[y_ceil, x_floor]
-    bottom_right = img[y_ceil, x_ceil]
-
-    top_mid = x_float * top_right + (1.0 - x_float) * top_left
-    bot_mid = x_float * bottom_right + (1.0 - x_float) * bottom_left
-
-    return float(y_float * bot_mid + (1.0 - y_float) * top_mid)
-
-
 def trace_line_from_gradient(
     mag: np.ndarray,
     px: int,
@@ -140,14 +116,14 @@ def trace_line_from_gradient(
         if not (0 < curr_x < w - 1 and 0 < curr_y < h - 1):
             break
 
-        val = bilinear_interpolate(mag, curr_x, curr_y)
-        if val <= thresh_val:
-            break
-
         ix = int(round(curr_x))
         iy = int(round(curr_y))
-        ix = max(0, min(w - 1, ix))
-        iy = max(0, min(h - 1, iy))
+        if not (0 <= ix < w and 0 <= iy < h):
+            break
+
+        val = float(mag[iy, ix])
+        if val <= thresh_val:
+            break
 
         cangle = math.atan2(grad_y[iy, ix], grad_x[iy, ix])
         mangle = mangle * (1.0 - lpf_atk) + cangle * lpf_atk
@@ -171,14 +147,14 @@ def trace_line_from_gradient(
         if not (0 < curr_x < w - 1 and 0 < curr_y < h - 1):
             break
 
-        val = bilinear_interpolate(mag, curr_x, curr_y)
-        if val <= thresh_val:
-            break
-
         ix = int(round(curr_x))
         iy = int(round(curr_y))
-        ix = max(0, min(w - 1, ix))
-        iy = max(0, min(h - 1, iy))
+        if not (0 <= ix < w and 0 <= iy < h):
+            break
+
+        val = float(mag[iy, ix])
+        if val <= thresh_val:
+            break
 
         cangle = math.atan2(grad_y[iy, ix], grad_x[iy, ix])
         mangle = mangle * (1.0 - lpf_atk) + cangle * lpf_atk
@@ -369,51 +345,94 @@ class PlotEngine:
 
         w, h = img_pil.size
 
-        # Convert to RGB then grayscale float array in [0.0, 1.0]
-        rgb = np.array(img_pil.convert("RGB"), dtype=np.float32)
-        gray = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+        # Determine cache key for expensive filtering and gradient stage
+        if isinstance(image_input, str):
+            try:
+                mtime = os.path.getmtime(image_input)
+            except OSError:
+                mtime = 0.0
+            img_cache_id = (image_input, mtime, is_preview)
+        elif isinstance(image_input, np.ndarray):
+            img_cache_id = (id(image_input), image_input.shape, is_preview)
+        elif isinstance(image_input, Image.Image):
+            img_cache_id = (id(image_input), image_input.size, is_preview)
+        else:
+            img_cache_id = (id(image_input), is_preview)
 
-        min_val = gray.min()
-        max_val = gray.max()
-        norm_gray = (gray - min_val) / max(1e-6, max_val - min_val)
+        filter_cache_key = (
+            img_cache_id,
+            w,
+            h,
+            self.params.use_clahe,
+            self.params.clahe_kernel_size,
+            self.params.clahe_clip_limit,
+            self.params.use_gaussian_blur,
+            self.params.gaussian_kernel_size,
+        )
 
-        update_progress(0.15, "Vorverarbeitung (Filter & Kontrast)...")
+        if filter_cache_key in _PREPROCESS_CACHE:
+            cached = _PREPROCESS_CACHE[filter_cache_key]
+            norm_gray = cached["norm_gray"]
+            mag = cached["mag"].copy()
+            display_mag = cached["display_mag"]
+            grad_x = cached["grad_x"]
+            grad_y = cached["grad_y"]
+        else:
+            # Convert to RGB then grayscale float array in [0.0, 1.0]
+            rgb = np.array(img_pil.convert("RGB"), dtype=np.float32)
+            gray = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
 
-        # 2. Preprocessing: CLAHE
-        if self.params.use_clahe:
-            norm_gray = skimage.exposure.equalize_adapthist(
-                norm_gray,
-                kernel_size=self.params.clahe_kernel_size,
-                clip_limit=self.params.clahe_clip_limit,
-            )
+            min_val = gray.min()
+            max_val = gray.max()
+            norm_gray = (gray - min_val) / max(1e-6, max_val - min_val)
 
-        # 3. Preprocessing: Gaussian Blur
-        if self.params.use_gaussian_blur and self.params.gaussian_kernel_size > 0:
-            norm_gray = scipy.ndimage.gaussian_filter(
-                norm_gray, sigma=self.params.gaussian_kernel_size
-            )
+            update_progress(0.15, "Vorverarbeitung (Filter & Kontrast)...")
 
-        update_progress(0.25, "Kanten und Gradienten berechnen...")
+            # 2. Preprocessing: CLAHE
+            if self.params.use_clahe:
+                norm_gray = skimage.exposure.equalize_adapthist(
+                    norm_gray,
+                    kernel_size=self.params.clahe_kernel_size,
+                    clip_limit=self.params.clahe_clip_limit,
+                )
 
-        # 4. Sobel & Gradient extraction
-        sobel_dx = scipy.ndimage.sobel(norm_gray, axis=1)
-        sobel_dy = scipy.ndimage.sobel(norm_gray, axis=0)
-        mag = np.hypot(sobel_dx, sobel_dy)
+            # 3. Preprocessing: Gaussian Blur
+            if self.params.use_gaussian_blur and self.params.gaussian_kernel_size > 0:
+                norm_gray = scipy.ndimage.gaussian_filter(
+                    norm_gray, sigma=self.params.gaussian_kernel_size
+                )
 
-        # Modulate by low-frequency darkness to increase probability in dark regions
-        img_blur = scipy.ndimage.gaussian_filter(norm_gray, sigma=2.0)
-        mag = np.multiply(mag, img_blur.max() - img_blur)
+            update_progress(0.25, "Kanten und Gradienten berechnen...")
 
-        sum_mag = np.sum(mag)
-        if sum_mag > 0:
-            mag = mag / sum_mag
+            # 4. Sobel & Gradient extraction
+            sobel_dx = scipy.ndimage.sobel(norm_gray, axis=1)
+            sobel_dy = scipy.ndimage.sobel(norm_gray, axis=0)
+            mag = np.hypot(sobel_dx, sobel_dy)
 
-        # Keep a copy of magnitude for preview display
-        display_mag = mag.copy()
-        if display_mag.max() > 0:
-            display_mag /= display_mag.max()
+            # Modulate by low-frequency darkness to increase probability in dark regions
+            img_blur = scipy.ndimage.gaussian_filter(norm_gray, sigma=2.0)
+            mag = np.multiply(mag, img_blur.max() - img_blur)
 
-        grad_y, grad_x = np.gradient(norm_gray)
+            sum_mag = np.sum(mag)
+            if sum_mag > 0:
+                mag = mag / sum_mag
+
+            # Keep a copy of magnitude for preview display
+            display_mag = mag.copy()
+            if display_mag.max() > 0:
+                display_mag /= display_mag.max()
+
+            grad_y, grad_x = np.gradient(norm_gray)
+
+            # Keep cache size bounded to 1 entry
+            _PREPROCESS_CACHE.clear()
+            _PREPROCESS_CACHE[filter_cache_key] = {
+                "norm_gray": norm_gray,
+                "mag": mag.copy(),
+                "display_mag": display_mag,
+                "grad_x": grad_x,
+                "grad_y": grad_y,
+            }
 
         update_progress(0.35, "Linien werden extrahiert...")
 

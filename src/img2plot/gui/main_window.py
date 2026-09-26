@@ -252,14 +252,6 @@ class MainWindow(QMainWindow):
             self.act_tb_fullscreen.setText("Fenster (F11)")
             self.statusBar().showMessage("Vollbildmodus aktiviert (Drücke F11 oder Escape zum Beenden).", 3500)
 
-    def closeEvent(self, event) -> None:
-        """Ensure background threads are safely terminated upon window closing."""
-        self.debounce_timer.stop()
-        if self.worker and self.worker.isRunning():
-            self.worker.cancel()
-            self.worker.wait(1000)
-        super().closeEvent(event)
-
     def keyPressEvent(self, event) -> None:
         """Handle global keyboard shortcuts."""
         if event.key() == Qt.Key.Key_F11:
@@ -272,7 +264,8 @@ class MainWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:
-        """Cleanly stop persistent worker thread on application exit."""
+        """Cleanly stop persistent worker thread and timers on application exit."""
+        self.debounce_timer.stop()
         if self.worker:
             self.worker.stop()
         super().closeEvent(event)

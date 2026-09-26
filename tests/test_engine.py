@@ -166,3 +166,22 @@ def test_engine_processing_and_exports():
         export_png(result, params, png_file)
         assert os.path.isfile(png_file)
         assert os.path.getsize(png_file) > 100
+
+
+def test_engine_preprocess_cache():
+    from img2plot.core.engine import _PREPROCESS_CACHE
+    arr = np.zeros((60, 60, 3), dtype=np.uint8)
+    arr[15:45, 15:45] = 255
+    test_img = Image.fromarray(arr)
+
+    p1 = PlotParameters(min_line_length=15, termination_ratio=0.5)
+    e1 = PlotEngine(p1)
+    res1 = e1.process_image(test_img, is_preview=True)
+    assert len(_PREPROCESS_CACHE) == 1
+
+    # Second run with different line parameters re-uses cache
+    p2 = PlotParameters(min_line_length=20, termination_ratio=0.7)
+    e2 = PlotEngine(p2)
+    res2 = e2.process_image(test_img, is_preview=True)
+    assert res1.preprocessed_gray is res2.preprocessed_gray or np.array_equal(res1.preprocessed_gray, res2.preprocessed_gray)
+

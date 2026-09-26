@@ -53,7 +53,6 @@ class CanvasView(QWidget):
         self.zoom: float = 1.0
         self.pan_offset: QPointF = QPointF(0.0, 0.0)
         self.is_panning: bool = False
-        self.is_zooming: bool = False
         self.last_mouse_pos: QPointF = QPointF(0.0, 0.0)
 
         # Data to render
@@ -68,12 +67,6 @@ class CanvasView(QWidget):
         self.cached_vector_path: Optional[QPainterPath] = None
         self.cached_hatch_path: Optional[QPainterPath] = None
         self.cached_rendered_pixmap: Optional[QPixmap] = None
-
-        # Zoom debounce timer for interactive performance
-        self.zoom_debounce_timer = QTimer(self)
-        self.zoom_debounce_timer.setSingleShot(True)
-        self.zoom_debounce_timer.setInterval(120)
-        self.zoom_debounce_timer.timeout.connect(self._on_zoom_settled)
 
     def set_preview_data(self, data: PreviewRenderData) -> None:
         """Instantly apply pre-computed background worker assets without any GUI lag."""
@@ -226,7 +219,7 @@ class CanvasView(QWidget):
         self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """Smooth zooming anchored at mouse cursor with debounced high-quality rendering."""
+        """Smooth zooming anchored at mouse cursor."""
         angle_delta = event.angleDelta().y()
         if angle_delta == 0:
             return
@@ -240,15 +233,6 @@ class CanvasView(QWidget):
         self.pan_offset = mouse_pos - (mouse_pos - self.pan_offset) * (new_zoom / old_zoom)
         self.zoom = new_zoom
         self.sig_zoom_changed.emit(self.zoom)
-
-        # Flag that we are interactively zooming: use fast raster blit
-        self.is_zooming = True
-        self.zoom_debounce_timer.start()
-        self.update()
-
-    def _on_zoom_settled(self) -> None:
-        """Fires 120ms after zooming stops to render full crisp vector paths."""
-        self.is_zooming = False
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -306,12 +290,11 @@ class CanvasView(QWidget):
 
         img_rect = QRectF(0.0, 0.0, w, h)
 
-        # FAST INTERACTION MODE: During mouse wheel zoom or drag pan,
-        # blit pre-rendered cache for instant 60 FPS performance!
-        if (self.is_zooming or self.is_panning) and self.cached_rendered_pixmap is not None:
+        # FAST INTERACTION & NON-BLOCKING DISPLAY:
+        # Blit pre-rendered cache if available for instant 60+ FPS performance!
+        if self.cached_rendered_pixmap is not None:
             painter.drawPixmap(img_rect.toRect(), self.cached_rendered_pixmap)
         else:
-            # SHARP MODE: Render full vector quality at current zoom level
             bg_col = QColor("#ffffff")
             if self.paper_style == "paper":
                 bg_col = QColor("#faf5eb")

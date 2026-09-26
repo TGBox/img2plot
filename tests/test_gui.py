@@ -285,3 +285,30 @@ def test_worker_async_preview_generation(qapp):
     assert not data.cached_vector_path.isEmpty() or not data.cached_hatch_path.isEmpty()
 
 
+def test_preview_widget_blit_rendering(qapp):
+    from img2plot.gui.preview_widget import PreviewWidget
+    from img2plot.core.engine import EngineResult, StrokePath, PlotStats
+    import numpy as np
+
+    widget = PreviewWidget()
+    gray = np.zeros((100, 100), dtype=np.float32)
+    mag = np.zeros((100, 100), dtype=np.float32)
+    stroke = StrokePath(points=[(10.0, 10.0), (90.0, 90.0)])
+    result = EngineResult(
+        paths=[stroke],
+        width=100,
+        height=100,
+        preprocessed_gray=gray,
+        sobel_magnitude=mag,
+        stats=PlotStats(total_strokes=1),
+    )
+
+    widget.set_result(result)
+    assert widget.canvas.cached_rendered_pixmap is not None
+    assert not widget.canvas.cached_rendered_pixmap.isNull()
+
+    # Trigger a paintEvent to ensure blit renders without errors
+    widget.canvas.repaint()
+
+
+
