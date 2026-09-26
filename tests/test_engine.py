@@ -56,22 +56,51 @@ def test_bezier_fitting():
 
 
 def test_hatching_generation():
-    # Create image with a dark square in center
-    img = np.ones((100, 100), dtype=np.float32)
-    img[30:70, 30:70] = 0.1  # Dark shadow region
+    # Create image with a dark circular spot in center to test contour curvature
+    y, x = np.ogrid[:100, :100]
+    dist_from_center = np.hypot(x - 50, y - 50)
+    # Circular gradient: dark at center, bright at edge
+    img = np.clip(dist_from_center / 50.0, 0.0, 1.0).astype(np.float32)
 
-    strokes = generate_hatching(
+    # 1. Test Bezier form-following hatching
+    bezier_strokes = generate_hatching(
         img,
-        threshold=0.35,
+        threshold=0.50,
         spacing=8,
         angle_deg=45.0,
         cross_hatch=True,
         min_length=5,
+        mode="bezier",
+        curve_strength=0.8,
+        wobble=0.2,
     )
-    assert len(strokes) > 0
-    for p1, p2 in strokes:
+    assert len(bezier_strokes) > 0
+    # Check that bezier strokes have cubic segments and valid SVG path strings
+    has_bezier = any(s.is_bezier for s in bezier_strokes)
+    assert has_bezier is True
+    for s in bezier_strokes:
+        if s.is_bezier:
+            assert len(s.cubic_segments) > 0
+            assert "C" in s.svg_d
+        # Backward compatibility unpacking
+        p1, p2 = s
         assert len(p1) == 2
         assert len(p2) == 2
+
+    # 2. Test classic straight hatching
+    straight_strokes = generate_hatching(
+        img,
+        threshold=0.50,
+        spacing=8,
+        angle_deg=45.0,
+        cross_hatch=False,
+        min_length=5,
+        mode="straight",
+    )
+    assert len(straight_strokes) > 0
+    for s in straight_strokes:
+        assert s.is_bezier is False
+        assert "L" in s.svg_d
 
 
 def test_engine_processing_and_exports():

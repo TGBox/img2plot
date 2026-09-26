@@ -16,8 +16,8 @@
   3. *Kanten / Sobel-Karte*: Kanten- und Gradientenwahrscheinlichkeitskarte.
   4. *Überlagerung (Overlay)*: Vektorkonturen direkt über dem Quellbild mit einstellbarer Deckkraft.
 - **〰️ Organische Bézier-Kurven**: Statt starrer gerader Sehnen können Kantenverläufe als glatte kubische Bézier-Kurven gezeichnet werden, was einen lebendigen Handzeichnungs-Charakter erzeugt.
-- **📐 Schraffur-Modus (Hatching)**: Schattiert dunkle Bildbereiche wahlweise mit parallelen Linien oder Kreuzschraffur bei einstellbarem Winkel und Abstand.
-- **⚡ Plotter-Wegoptimierung (Nearest Neighbor TSP)**: Sortiert Striche automatisch, um Leerfahrten (*Pen-Up*) drastisch zu reduzieren und Plotzeiten um bis zu 70 % zu verkürzen.
+- **📐 Formfolgende Bézier-Schraffur (Hatching)**: Schattiert dunkle Bildbereiche nicht nur mit geraden Linien, sondern passt die Schraffuren über ein Vektorfeld den organischen Konturen und Kurven der Bildoberfläche an (mit einstellbarer Krümmungsstärke und subtilem Handzeichnungs-Wobble).
+- **⚡ Plotter-Wegoptimierung (Nearest Neighbor TSP)**: Beschleunigte räumliche Sortierung (Spatial Bucket Grid) reduziert Leerfahrten (*Pen-Up*) drastisch und verkürzt Plotzeiten um bis zu 70 %.
 - **⛶ Vollbild- & Fenstermodus**: Schnelles Umschalten zwischen Vollbild und Fenster per `F11` oder Menüleiste/Toolbar.
 - **🎛️ Voreinstellungen (Presets)**: Integrierte Profile (*Standard*, *Feine Details*, *Künstlerische Skizze*, *Starke Konturen*, *Klassische Gravur*, *Schnell-Entwurf*) plus Speichern und Laden von JSON-Dateien.
 - **💾 Export**: Saubere SVG-Dateien mit mm-Bemaßung, Stiftbreiten und Ebenen (*Contours* & *Hatching*) für Plotter (Silhouette Cameo, AxiDraw, Cricut etc.) sowie hochauflösender PNG-Export.

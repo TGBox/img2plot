@@ -41,6 +41,9 @@ class PlotParameters:
 
     # Hatching (Schraffur für dunkle Flächen)
     use_hatching: bool = False
+    hatch_mode: str = "bezier"  # "bezier" (form-following curved lines) or "straight"
+    hatch_curve_strength: float = 0.65  # How strongly hatching curves follow underlying image contours (0.0 to 1.0)
+    hatch_wobble: float = 0.0  # Subtle organic hand-drawn wobble amplitude (0.0 to 2.0 px)
     hatching_threshold: float = 0.35  # Grayscale brightness threshold (0.0=black, 1.0=white)
     hatching_spacing: int = 10  # Pixel spacing between hatching lines
     hatching_angle_deg: float = 45.0  # Angle of hatching lines

@@ -28,6 +28,9 @@ def test_sidebar_parameter_sync(qapp):
         line_mode="bezier",
         bezier_smoothness=0.52,
         use_hatching=True,
+        hatch_mode="bezier",
+        hatch_curve_strength=0.75,
+        hatch_wobble=0.3,
         hatching_threshold=0.42,
     )
     sidebar.apply_parameters(p)
@@ -37,6 +40,9 @@ def test_sidebar_parameter_sync(qapp):
     assert read_p.line_mode == "bezier"
     assert abs(read_p.bezier_smoothness - 0.52) < 0.05
     assert read_p.use_hatching is True
+    assert read_p.hatch_mode == "bezier"
+    assert abs(read_p.hatch_curve_strength - 0.75) < 0.05
+    assert abs(read_p.hatch_wobble - 0.3) < 0.05
     assert abs(read_p.hatching_threshold - 0.42) < 0.05
 
 

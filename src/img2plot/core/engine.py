@@ -44,6 +44,14 @@ class StrokePath:
             total += math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
         return total
 
+    def __iter__(self):
+        """Allows unpacking as (start_pt, end_pt) for backward compatibility."""
+        if len(self.points) >= 2:
+            return iter((self.points[0], self.points[-1]))
+        elif len(self.points) == 1:
+            return iter((self.points[0], self.points[0]))
+        return iter(())
+
 
 @dataclass
 class PlotStats:
@@ -187,47 +195,103 @@ def trace_line_from_gradient(
 
 def optimize_pen_travel(paths: List[StrokePath]) -> Tuple[List[StrokePath], float]:
     """
-    Greedy nearest-neighbor sorting of stroke paths to minimize pen-up travel distance.
-    Returns (sorted_paths, total_pen_up_distance).
+    Fast nearest-neighbor sorting of stroke paths to minimize pen-up travel distance
+    using spatial bucket hashing for O(N) performance on large path sets.
     """
     if len(paths) <= 1:
         return paths, 0.0
 
-    remaining = list(paths)
+    n = len(paths)
+    xs = [p.points[0][0] for p in paths] + [p.points[-1][0] for p in paths]
+    ys = [p.points[0][1] for p in paths] + [p.points[-1][1] for p in paths]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span = max(1.0, max(max_x - min_x, max_y - min_y))
+
+    cell_size = max(10.0, span / max(10, int(math.sqrt(n))))
+
+    from collections import defaultdict
+    grid = defaultdict(set)
+    for idx, path in enumerate(paths):
+        s_cx = int(path.points[0][0] / cell_size)
+        s_cy = int(path.points[0][1] / cell_size)
+        e_cx = int(path.points[-1][0] / cell_size)
+        e_cy = int(path.points[-1][1] / cell_size)
+        grid[(s_cx, s_cy)].add(idx)
+        grid[(e_cx, e_cy)].add(idx)
+
+    visited = [False] * n
     sorted_paths: List[StrokePath] = []
     curr_pos: Point2D = (0.0, 0.0)
     total_pen_up = 0.0
 
-    while remaining:
-        best_idx = 0
+    for _ in range(n):
+        c_cx = int(curr_pos[0] / cell_size)
+        c_cy = int(curr_pos[1] / cell_size)
+
+        best_idx = -1
         best_dist = float("inf")
         best_reverse = False
 
-        for i, path in enumerate(remaining):
-            start_pt = path.points[0]
-            end_pt = path.points[-1]
+        # Search in expanding rings of grid cells
+        max_ring = 3
+        found_in_ring = False
+        for ring in range(0, max_ring + 1):
+            ring_candidates = set()
+            for dx in range(-ring, ring + 1):
+                dy_vals = (-ring, ring) if ring > 0 else (0,)
+                for dy in dy_vals:
+                    ring_candidates.update(grid.get((c_cx + dx, c_cy + dy), ()))
+                    ring_candidates.update(grid.get((c_cx + dy, c_cy + dx), ()))
 
-            d_start = math.hypot(start_pt[0] - curr_pos[0], start_pt[1] - curr_pos[1])
-            d_end = math.hypot(end_pt[0] - curr_pos[0], end_pt[1] - curr_pos[1])
+            for p_idx in ring_candidates:
+                if visited[p_idx]:
+                    continue
+                path = paths[p_idx]
+                s_pt = path.points[0]
+                e_pt = path.points[-1]
+                d_s = math.hypot(s_pt[0] - curr_pos[0], s_pt[1] - curr_pos[1])
+                d_e = math.hypot(e_pt[0] - curr_pos[0], e_pt[1] - curr_pos[1])
 
-            if d_start < best_dist:
-                best_dist = d_start
-                best_idx = i
-                best_reverse = False
+                if d_s < best_dist:
+                    best_dist = d_s
+                    best_idx = p_idx
+                    best_reverse = False
+                if d_e < best_dist:
+                    best_dist = d_e
+                    best_idx = p_idx
+                    best_reverse = True
 
-            if d_end < best_dist:
-                best_dist = d_end
-                best_idx = i
-                best_reverse = True
+            if best_idx != -1:
+                found_in_ring = True
+                break
 
-        chosen = remaining.pop(best_idx)
+        # Fallback if no neighbor found within max_ring: scan remaining unvisited
+        if not found_in_ring:
+            for p_idx in range(n):
+                if visited[p_idx]:
+                    continue
+                path = paths[p_idx]
+                s_pt = path.points[0]
+                e_pt = path.points[-1]
+                d_s = math.hypot(s_pt[0] - curr_pos[0], s_pt[1] - curr_pos[1])
+                d_e = math.hypot(e_pt[0] - curr_pos[0], e_pt[1] - curr_pos[1])
+                if d_s < best_dist:
+                    best_dist = d_s
+                    best_idx = p_idx
+                    best_reverse = False
+                if d_e < best_dist:
+                    best_dist = d_e
+                    best_idx = p_idx
+                    best_reverse = True
+
+        visited[best_idx] = True
+        chosen = paths[best_idx]
         total_pen_up += best_dist
 
         if best_reverse:
-            # Reverse path direction
             rev_pts = list(reversed(chosen.points))
             if chosen.is_bezier:
-                # Recalculate cubic segments for reversed points
                 segs = fit_cubic_spline(rev_pts, tension=0.35)
                 chosen = StrokePath(
                     points=rev_pts,
@@ -452,21 +516,25 @@ class PlotEngine:
         # 5. Hatching for shadows / dark areas if requested
         hatch_count = 0
         if self.params.use_hatching:
-            hatch_segments = generate_hatching(
+            hatch_strokes = generate_hatching(
                 gray_image=norm_gray,
                 threshold=self.params.hatching_threshold,
                 spacing=self.params.hatching_spacing,
                 angle_deg=self.params.hatching_angle_deg,
                 cross_hatch=self.params.cross_hatch,
                 min_length=self.params.hatching_min_length,
+                mode=self.params.hatch_mode,
+                curve_strength=self.params.hatch_curve_strength,
+                wobble=self.params.hatch_wobble,
+                bezier_smoothness=self.params.bezier_smoothness,
             )
-            for (p1, p2) in hatch_segments:
-                d_str = f"M {p1[0]:.2f},{p1[1]:.2f} L {p2[0]:.2f},{p2[1]:.2f}"
+            for hs in hatch_strokes:
                 paths.append(
                     StrokePath(
-                        points=[p1, p2],
-                        is_bezier=False,
-                        svg_d=d_str,
+                        points=hs.points,
+                        is_bezier=hs.is_bezier,
+                        cubic_segments=hs.cubic_segments,
+                        svg_d=hs.svg_d,
                         is_hatch=True,
                     )
                 )

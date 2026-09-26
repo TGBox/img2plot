@@ -424,6 +424,40 @@ class SidebarWidget(QWidget):
         self.chk_hatching.stateChanged.connect(self._on_hatching_toggled)
         layout.addWidget(self.chk_hatching)
 
+        layout.addWidget(QLabel("Schraffurstil:"))
+        self.combo_hatch_mode = QComboBox()
+        self.combo_hatch_mode.addItems([
+            "Glatte Bézier-Kurven (Formfolgend)",
+            "Gerade Striche (Klassisch)",
+        ])
+        self.combo_hatch_mode.currentIndexChanged.connect(self._emit_param_change)
+        layout.addWidget(self.combo_hatch_mode)
+
+        self.slider_hatch_curve = SliderRow(
+            title="Form-Anpassung / Krümmung:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.65,
+            step=0.05,
+            decimals=2,
+            tooltip="Wie stark sich die Schraffurkurven an die darunterliegenden Kanten und Formverläufe anpassen (0 = gerade, 1 = vollständig formfolgend).",
+        )
+        self.slider_hatch_curve.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_hatch_curve)
+
+        self.slider_hatch_wobble = SliderRow(
+            title="Organische Wellung (Wobble):",
+            min_val=0.0,
+            max_val=2.0,
+            default_val=0.0,
+            step=0.1,
+            decimals=1,
+            suffix="px",
+            tooltip="Fügt eine subtile, handgezeichnete Vibration hinzu.",
+        )
+        self.slider_hatch_wobble.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_hatch_wobble)
+
         self.slider_hatch_thresh = SliderRow(
             title="Dunkelheits-Schwelle:",
             min_val=0.10,
@@ -455,7 +489,7 @@ class SidebarWidget(QWidget):
             default_val=45.0,
             step=5.0,
             suffix="°",
-            tooltip="Winkel der Schraffurlinien.",
+            tooltip="Grundrichtung der Schraffurlinien.",
         )
         self.slider_hatch_angle.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_hatch_angle)
@@ -578,6 +612,9 @@ class SidebarWidget(QWidget):
         p.curve_sample_step = int(self.slider_sample_step.get_value())
 
         p.use_hatching = self.chk_hatching.isChecked()
+        p.hatch_mode = "bezier" if self.combo_hatch_mode.currentIndex() == 0 else "straight"
+        p.hatch_curve_strength = self.slider_hatch_curve.get_value()
+        p.hatch_wobble = self.slider_hatch_wobble.get_value()
         p.hatching_threshold = self.slider_hatch_thresh.get_value()
         p.hatching_spacing = int(self.slider_hatch_spacing.get_value())
         p.hatching_angle_deg = self.slider_hatch_angle.get_value()
@@ -618,6 +655,9 @@ class SidebarWidget(QWidget):
         self.slider_sample_step.set_value(p.curve_sample_step)
 
         self.chk_hatching.setChecked(p.use_hatching)
+        self.combo_hatch_mode.setCurrentIndex(0 if p.hatch_mode.lower() == "bezier" else 1)
+        self.slider_hatch_curve.set_value(p.hatch_curve_strength)
+        self.slider_hatch_wobble.set_value(p.hatch_wobble)
         self.slider_hatch_thresh.set_value(p.hatching_threshold)
         self.slider_hatch_spacing.set_value(p.hatching_spacing)
         self.slider_hatch_angle.set_value(p.hatching_angle_deg)
