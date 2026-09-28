@@ -234,6 +234,7 @@ class SidebarWidget(QWidget):
         self._build_line_detection_section()
         self._build_style_section()
         self._build_hatching_section()
+        self._build_shapes_section()
         self._build_page_export_section()
         self._build_stats_section()
 
@@ -603,6 +604,186 @@ class SidebarWidget(QWidget):
 
         self.layout_content.addWidget(box)
 
+    # Mapping lists for shape type and rotation mode combo boxes
+    _SHAPE_TYPE_VALUES = [
+        "dots", "circles", "rects", "triangles", "lines",
+        "stars", "diamonds", "hexagons", "spirals", "hearts", "ascii",
+    ]
+    _ROTATION_MODE_VALUES = ["none", "random", "gradient", "mixed"]
+
+    def _build_shapes_section(self) -> None:
+        """Build the Shapes mode control section."""
+        box = QGroupBox("\u2728 Formen-Modus (Shapes)")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(6)
+
+        # Enable toggle
+        self.chk_shapes = QCheckBox("Formen-Modus aktivieren")
+        self.chk_shapes.setChecked(False)
+        self.chk_shapes.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_shapes)
+
+        # Shape type
+        layout.addWidget(QLabel("Formtyp:"))
+        self.combo_shape_type = QComboBox()
+        self.combo_shape_type.addItems([
+            "Punkte (Dots)", "Kreise (Kontur)", "Rechtecke",
+            "Dreiecke", "Linien-Segmente", "Sterne", "Rauten",
+            "Hexagons", "Spiralen", "Herzen", "ASCII-Zeichen",
+        ])
+        self.combo_shape_type.currentIndexChanged.connect(self._on_shape_type_changed)
+        layout.addWidget(self.combo_shape_type)
+
+        # ASCII charset (only visible for ASCII mode)
+        self.lbl_ascii_charset = QLabel("Zeichensatz (dunkel \u2192 hell):")
+        self.edit_ascii_charset = QLineEdit("@#S%?*+;:,. ")
+        self.edit_ascii_charset.textChanged.connect(self._emit_param_change)
+        layout.addWidget(self.lbl_ascii_charset)
+        layout.addWidget(self.edit_ascii_charset)
+        self.lbl_ascii_charset.setVisible(False)
+        self.edit_ascii_charset.setVisible(False)
+
+        # Placement
+        layout.addWidget(QLabel("Platzierung:"))
+        self.combo_shape_placement = QComboBox()
+        self.combo_shape_placement.addItems(["Raster (Grid)", "Zuf\u00e4llig (Random)"])
+        self.combo_shape_placement.currentIndexChanged.connect(self._emit_param_change)
+        layout.addWidget(self.combo_shape_placement)
+
+        # Size sliders
+        self.slider_shape_min_size = SliderRow(
+            title="Min. Gr\u00f6\u00dfe (helle Bereiche):",
+            min_val=1.0,
+            max_val=30.0,
+            default_val=2.0,
+            step=0.5,
+            decimals=1,
+            suffix="px",
+            tooltip="Minimale Formgr\u00f6\u00dfe in hellen Bildbereichen.",
+        )
+        self.slider_shape_min_size.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_shape_min_size)
+
+        self.slider_shape_max_size = SliderRow(
+            title="Max. Gr\u00f6\u00dfe (dunkle Bereiche):",
+            min_val=2.0,
+            max_val=60.0,
+            default_val=20.0,
+            step=1.0,
+            decimals=0,
+            suffix="px",
+            tooltip="Maximale Formgr\u00f6\u00dfe in dunklen Bildbereichen.",
+        )
+        self.slider_shape_max_size.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_shape_max_size)
+
+        # Density
+        self.slider_shape_density = SliderRow(
+            title="Dichte:",
+            min_val=0.1,
+            max_val=2.0,
+            default_val=0.6,
+            step=0.05,
+            decimals=2,
+            tooltip="Anzahl der Formen pro Fl\u00e4che. H\u00f6herer Wert = dichter.",
+        )
+        self.slider_shape_density.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_shape_density)
+
+        # Brightness-driven size and density
+        self.chk_shape_size_by_bright = QCheckBox("Gr\u00f6\u00dfe nach Helligkeit (dunkel = gro\u00df)")
+        self.chk_shape_size_by_bright.setChecked(True)
+        self.chk_shape_size_by_bright.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_shape_size_by_bright)
+
+        self.chk_shape_density_by_bright = QCheckBox("Dichte nach Helligkeit (dunkel = mehr)")
+        self.chk_shape_density_by_bright.setChecked(True)
+        self.chk_shape_density_by_bright.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_shape_density_by_bright)
+
+        # Rotation mode
+        layout.addWidget(QLabel("Rotationsmodus:"))
+        self.combo_shape_rotation = QComboBox()
+        self.combo_shape_rotation.addItems([
+            "Keine Rotation", "Zuf\u00e4llig", "Gradientenausgerichtet", "Gemischt",
+        ])
+        self.combo_shape_rotation.setCurrentIndex(1)  # default: random
+        self.combo_shape_rotation.currentIndexChanged.connect(self._on_shape_rotation_changed)
+        layout.addWidget(self.combo_shape_rotation)
+
+        self.slider_shape_gradient_align = SliderRow(
+            title="Gradient-Einfluss:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.5,
+            step=0.05,
+            decimals=2,
+            tooltip="0 = rein zuf\u00e4llig, 1 = vollst\u00e4ndig gradientenausgerichtet (nur im Gemischt-Modus).",
+        )
+        self.slider_shape_gradient_align.sig_value_changed.connect(self._emit_param_change)
+        self.slider_shape_gradient_align.setVisible(False)
+        layout.addWidget(self.slider_shape_gradient_align)
+
+        # Randomize button
+        self.btn_randomize = QPushButton("\U0001F3B2  Zuf\u00e4llige Einstellungen")
+        self.btn_randomize.setObjectName("randomizeButton")
+        self.btn_randomize.setToolTip(
+            "Setzt alle Formen-Parameter auf erlaubte, zuf\u00e4llige Werte und berechnet die Vorschau neu."
+        )
+        self.btn_randomize.clicked.connect(self._randomize_shape_params)
+        layout.addWidget(self.btn_randomize)
+
+        self.layout_content.addWidget(box)
+
+    def _on_shape_type_changed(self, idx: int) -> None:
+        """Show/hide ASCII charset field depending on selected shape type."""
+        is_ascii = (idx == len(self._SHAPE_TYPE_VALUES) - 1)  # ASCII is last
+        self.lbl_ascii_charset.setVisible(is_ascii)
+        self.edit_ascii_charset.setVisible(is_ascii)
+        self._emit_param_change()
+
+    def _on_shape_rotation_changed(self, idx: int) -> None:
+        """Show/hide gradient align slider for 'mixed' mode."""
+        self.slider_shape_gradient_align.setVisible(idx == 3)  # 3 = Gemischt
+        self._emit_param_change()
+
+    def _randomize_shape_params(self) -> None:
+        """Randomize all shape mode parameters with valid values and trigger recalculation."""
+        import random
+        self._block_signals = True
+
+        # Enable shapes if not already on
+        self.chk_shapes.setChecked(True)
+
+        # Random shape type
+        n_types = self.combo_shape_type.count()
+        self.combo_shape_type.setCurrentIndex(random.randint(0, n_types - 1))
+
+        # Random placement
+        self.combo_shape_placement.setCurrentIndex(random.randint(0, 1))
+
+        # Random size range (ensure min < max)
+        min_s = random.uniform(1.0, 12.0)
+        max_s = random.uniform(min_s + 3.0, 45.0)
+        self.slider_shape_min_size.set_value(min_s)
+        self.slider_shape_max_size.set_value(max_s)
+
+        # Random density
+        self.slider_shape_density.set_value(random.uniform(0.15, 1.6))
+
+        # Random brightness options (70% chance each is on)
+        self.chk_shape_size_by_bright.setChecked(random.random() > 0.3)
+        self.chk_shape_density_by_bright.setChecked(random.random() > 0.3)
+
+        # Random rotation mode
+        rot_idx = random.randint(0, 3)
+        self.combo_shape_rotation.setCurrentIndex(rot_idx)
+        self.slider_shape_gradient_align.set_value(random.uniform(0.0, 1.0))
+        self.slider_shape_gradient_align.setVisible(rot_idx == 3)
+
+        self._block_signals = False
+        self._emit_param_change()
+
     def _build_page_export_section(self) -> None:
         box = QGroupBox("Papier & Plotter-Optionen")
         layout = QVBoxLayout(box)
@@ -675,20 +856,25 @@ class SidebarWidget(QWidget):
         self.lbl_stat_hatch.setStyleSheet("color: #38bdf8; font-weight: bold;")
         layout.addWidget(self.lbl_stat_hatch, 1, 1)
 
-        layout.addWidget(QLabel("Zeichenlänge gesamt:"), 2, 0)
+        layout.addWidget(QLabel("Formstriche:"), 2, 0)
+        self.lbl_stat_shapes = QLabel("0")
+        self.lbl_stat_shapes.setStyleSheet("color: #a78bfa; font-weight: bold;")
+        layout.addWidget(self.lbl_stat_shapes, 2, 1)
+
+        layout.addWidget(QLabel("Zeichenlänge gesamt:"), 3, 0)
         self.lbl_stat_len = QLabel("0.0 m")
         self.lbl_stat_len.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_len, 2, 1)
+        layout.addWidget(self.lbl_stat_len, 3, 1)
 
-        layout.addWidget(QLabel("Leerweg (Pen-Up):"), 3, 0)
+        layout.addWidget(QLabel("Leerweg (Pen-Up):"), 4, 0)
         self.lbl_stat_penup = QLabel("0.0 m")
         self.lbl_stat_penup.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_penup, 3, 1)
+        layout.addWidget(self.lbl_stat_penup, 4, 1)
 
-        layout.addWidget(QLabel("Berechnungsdauer:"), 4, 0)
+        layout.addWidget(QLabel("Berechnungsdauer:"), 5, 0)
         self.lbl_stat_time = QLabel("0.0 s")
         self.lbl_stat_time.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_time, 4, 1)
+        layout.addWidget(self.lbl_stat_time, 5, 1)
 
         self.layout_content.addWidget(box)
 
@@ -726,6 +912,20 @@ class SidebarWidget(QWidget):
         p.hatching_spacing = int(self.slider_hatch_spacing.get_value())
         p.hatching_angle_deg = self.slider_hatch_angle.get_value()
         p.cross_hatch = self.chk_cross_hatch.isChecked()
+
+        p.use_shapes = self.chk_shapes.isChecked()
+        idx = self.combo_shape_type.currentIndex()
+        p.shape_type = self._SHAPE_TYPE_VALUES[idx] if 0 <= idx < len(self._SHAPE_TYPE_VALUES) else "dots"
+        p.shape_placement = "grid" if self.combo_shape_placement.currentIndex() == 0 else "random"
+        p.shape_min_size = self.slider_shape_min_size.get_value()
+        p.shape_max_size = self.slider_shape_max_size.get_value()
+        p.shape_density = self.slider_shape_density.get_value()
+        p.shape_size_by_brightness = self.chk_shape_size_by_bright.isChecked()
+        p.shape_density_by_brightness = self.chk_shape_density_by_bright.isChecked()
+        ridx = self.combo_shape_rotation.currentIndex()
+        p.shape_rotation_mode = self._ROTATION_MODE_VALUES[ridx] if 0 <= ridx < len(self._ROTATION_MODE_VALUES) else "random"
+        p.shape_gradient_align = self.slider_shape_gradient_align.get_value()
+        p.shape_ascii_charset = self.edit_ascii_charset.text() or "@#S%?*+;:,. "
 
         p.page_format = self.combo_page.currentText()
         p.margin_mm = self.slider_margin.get_value()
@@ -770,6 +970,29 @@ class SidebarWidget(QWidget):
         self.slider_hatch_angle.set_value(p.hatching_angle_deg)
         self.chk_cross_hatch.setChecked(p.cross_hatch)
 
+        self.chk_shapes.setChecked(p.use_shapes)
+        try:
+            type_idx = self._SHAPE_TYPE_VALUES.index(p.shape_type)
+        except ValueError:
+            type_idx = 0
+        self.combo_shape_type.setCurrentIndex(type_idx)
+        self.lbl_ascii_charset.setVisible(type_idx == len(self._SHAPE_TYPE_VALUES) - 1)
+        self.edit_ascii_charset.setVisible(type_idx == len(self._SHAPE_TYPE_VALUES) - 1)
+        self.combo_shape_placement.setCurrentIndex(0 if p.shape_placement == "grid" else 1)
+        self.slider_shape_min_size.set_value(p.shape_min_size)
+        self.slider_shape_max_size.set_value(p.shape_max_size)
+        self.slider_shape_density.set_value(p.shape_density)
+        self.chk_shape_size_by_bright.setChecked(p.shape_size_by_brightness)
+        self.chk_shape_density_by_bright.setChecked(p.shape_density_by_brightness)
+        try:
+            rot_idx = self._ROTATION_MODE_VALUES.index(p.shape_rotation_mode)
+        except ValueError:
+            rot_idx = 1
+        self.combo_shape_rotation.setCurrentIndex(rot_idx)
+        self.slider_shape_gradient_align.set_value(p.shape_gradient_align)
+        self.slider_shape_gradient_align.setVisible(rot_idx == 3)
+        self.edit_ascii_charset.setText(p.shape_ascii_charset or "@#S%?*+;:,. ")
+
         idx = self.combo_page.findText(p.page_format)
         if idx >= 0:
             self.combo_page.setCurrentIndex(idx)
@@ -785,6 +1008,7 @@ class SidebarWidget(QWidget):
         """Display computation statistics in the statistics panel."""
         self.lbl_stat_lines.setText(f"{stats.contour_strokes}")
         self.lbl_stat_hatch.setText(f"{stats.hatch_strokes}")
+        self.lbl_stat_shapes.setText(f"{stats.shape_strokes}")
 
         mm_per_px = 0.264583
         draw_m = (stats.total_length_px * mm_per_px) / 1000.0

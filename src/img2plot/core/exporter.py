@@ -22,6 +22,98 @@ PAGE_SIZES_MM = {
 }
 
 
+# ---------------------------------------------------------------------------
+# SVG marker-protocol parsers
+# ---------------------------------------------------------------------------
+
+def _parse_marker(svg_d: str) -> dict:
+    """Parse a shape marker string into a dict of key=value pairs."""
+    parts = svg_d.split()
+    result: dict = {"__type__": parts[0]}
+    for token in parts[1:]:
+        if "=" in token:
+            k, v = token.split("=", 1)
+            result[k] = v
+    return result
+
+
+def _render_circle_tag(marker: dict, transform_pt, scale: float, stroke_col: str, stroke_w_mm: float) -> str:
+    cx, cy = transform_pt(float(marker["cx"]), float(marker["cy"]))
+    r = float(marker["r"]) * scale
+    filled = marker.get("fill", "0") == "1"
+    fill_attr = stroke_col if filled else "none"
+    return (
+        f'    <circle cx="{cx:.3f}" cy="{cy:.3f}" r="{r:.3f}" '
+        f'fill="{fill_attr}" stroke="{stroke_col}" stroke-width="{stroke_w_mm:.3f}mm" />'
+    )
+
+
+def _render_rect_tag(marker: dict, transform_pt, scale: float, stroke_col: str, stroke_w_mm: float) -> str:
+    cx, cy = transform_pt(float(marker["cx"]), float(marker["cy"]))
+    w = float(marker["w"]) * scale
+    h = float(marker["h"]) * scale
+    angle_rad = float(marker.get("a", "0"))
+    angle_deg = math.degrees(angle_rad)
+    return (
+        f'    <rect x="{cx - w / 2:.3f}" y="{cy - h / 2:.3f}" '
+        f'width="{w:.3f}" height="{h:.3f}" '
+        f'fill="none" stroke="{stroke_col}" stroke-width="{stroke_w_mm:.3f}mm" '
+        f'transform="rotate({angle_deg:.2f},{cx:.3f},{cy:.3f})" />'
+    )
+
+
+def _render_text_tag(marker: dict, transform_pt, scale: float, stroke_col: str) -> str:
+    cx, cy = transform_pt(float(marker["cx"]), float(marker["cy"]))
+    font_size = float(marker["s"]) * scale
+    char = marker.get("c", "?")
+    if char == "_":
+        char = " "
+    return (
+        f'    <text x="{cx:.3f}" y="{cy:.3f}" '
+        f'font-size="{font_size:.2f}" '
+        f'fill="{stroke_col}" '
+        f'text-anchor="middle" dominant-baseline="central" '
+        f'font-family="monospace">{char}</text>'
+    )
+
+
+def _transform_path_d(svg_d: str, transform_pt) -> str:
+    """Apply coordinate transform to a standard SVG path d-string (M/L/C/Z commands)."""
+    tokens = svg_d.split()
+    out: List[str] = []
+    i = 0
+    while i < len(tokens):
+        cmd = tokens[i]
+        if cmd == "Z":
+            out.append("Z")
+            i += 1
+        elif cmd in ("M", "L"):
+            out.append(cmd)
+            i += 1
+            if i < len(tokens):
+                x, y = map(float, tokens[i].split(","))
+                tx, ty = transform_pt(x, y)
+                out.append(f"{tx:.3f},{ty:.3f}")
+                i += 1
+        elif cmd == "C":
+            out.append("C")
+            i += 1
+            for _ in range(3):
+                if i < len(tokens):
+                    x, y = map(float, tokens[i].split(","))
+                    tx, ty = transform_pt(x, y)
+                    out.append(f"{tx:.3f},{ty:.3f}")
+                    i += 1
+        else:
+            out.append(cmd)
+            i += 1
+    return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Main export functions
+# ---------------------------------------------------------------------------
+
 def export_svg(
     result: EngineResult,
     params: PlotParameters,
@@ -66,6 +158,9 @@ def export_svg(
     stroke_col = params.stroke_color
     stroke_w_mm = params.stroke_width_mm
 
+    def transform_pt(x: float, y: float) -> Tuple[float, float]:
+        return (offset_x + x * scale, offset_y + y * scale)
+
     svg_lines: List[str] = [
         '<?xml version="1.0" encoding="UTF-8" standalone="no"?>',
         f'<svg xmlns="http://www.w3.org/2000/svg" '
@@ -83,16 +178,38 @@ def export_svg(
         f'fill="none" stroke-linecap="round" stroke-linejoin="round">',
     ]
 
-    def transform_pt(x: float, y: float) -> Tuple[float, float]:
-        return (offset_x + x * scale, offset_y + y * scale)
+    shape_lines: List[str] = [
+        f'  <!-- Layer 3: Artistic Shapes -->',
+        f'  <g id="layer_shapes" stroke="{stroke_col}" stroke-width="{stroke_w_mm:.3f}mm" '
+        f'fill="none" stroke-linecap="round" stroke-linejoin="round">',
+    ]
 
     for path in result.paths:
-        if path.is_bezier and path.cubic_segments:
-            # Transform cubic segments
+        svg_d = path.svg_d
+
+        # Determine target layer
+        if path.is_shape:
+            target = shape_lines
+        elif path.is_hatch:
+            target = hatch_lines
+        else:
+            target = svg_lines
+
+        # Render correct SVG element based on marker protocol or path type
+        if svg_d.startswith("__circle__"):
+            marker = _parse_marker(svg_d)
+            tag = _render_circle_tag(marker, transform_pt, scale, stroke_col, stroke_w_mm)
+        elif svg_d.startswith("__rect__"):
+            marker = _parse_marker(svg_d)
+            tag = _render_rect_tag(marker, transform_pt, scale, stroke_col, stroke_w_mm)
+        elif svg_d.startswith("__text__"):
+            marker = _parse_marker(svg_d)
+            tag = _render_text_tag(marker, transform_pt, scale, stroke_col)
+        elif path.is_bezier and path.cubic_segments:
+            # Transform cubic bezier segments
             segs_str = []
             p1_x, p1_y = transform_pt(*path.cubic_segments[0][0])
             segs_str.append(f"M {p1_x:.3f},{p1_y:.3f}")
-
             for _, c1, c2, p2 in path.cubic_segments:
                 c1_t = transform_pt(*c1)
                 c2_t = transform_pt(*c2)
@@ -101,21 +218,26 @@ def export_svg(
                     f"C {c1_t[0]:.3f},{c1_t[1]:.3f} {c2_t[0]:.3f},{c2_t[1]:.3f} {p2_t[0]:.3f},{p2_t[1]:.3f}"
                 )
             d = " ".join(segs_str)
+            tag = f'    <path d="{d}" />'
+        elif svg_d and (svg_d[0] in ("M", "C") or svg_d.startswith("M ")):
+            # Multi-command path (polygon shapes, spirals, hearts, etc.)
+            d = _transform_path_d(svg_d, transform_pt)
+            tag = f'    <path d="{d}" />'
         else:
+            # Simple two-point line
             p_start = transform_pt(*path.points[0])
             p_end = transform_pt(*path.points[-1])
             d = f"M {p_start[0]:.3f},{p_start[1]:.3f} L {p_end[0]:.3f},{p_end[1]:.3f}"
+            tag = f'    <path d="{d}" />'
 
-        path_tag = f'    <path d="{d}" />'
-        if path.is_hatch:
-            hatch_lines.append(path_tag)
-        else:
-            svg_lines.append(path_tag)
+        target.append(tag)
 
     svg_lines.append('  </g>')
     hatch_lines.append('  </g>')
+    shape_lines.append('  </g>')
 
     svg_lines.extend(hatch_lines)
+    svg_lines.extend(shape_lines)
     svg_lines.append('</svg>\n')
 
     with open(output_path, "w", encoding="utf-8") as f:
@@ -144,6 +266,48 @@ def export_png(
     line_width = max(1, int(round(params.stroke_width_mm * 2.5 * scale_factor)))
 
     for path in result.paths:
+        svg_d = path.svg_d
+
+        if svg_d.startswith("__circle__"):
+            marker = _parse_marker(svg_d)
+            cx = float(marker["cx"]) * scale_factor
+            cy = float(marker["cy"]) * scale_factor
+            r = float(marker["r"]) * scale_factor
+            filled = marker.get("fill", "0") == "1"
+            bbox = [cx - r, cy - r, cx + r, cy + r]
+            if filled:
+                draw.ellipse(bbox, fill=line_color, outline=line_color, width=line_width)
+            else:
+                draw.ellipse(bbox, fill=None, outline=line_color, width=line_width)
+            continue
+
+        if svg_d.startswith("__rect__"):
+            marker = _parse_marker(svg_d)
+            cx = float(marker["cx"]) * scale_factor
+            cy = float(marker["cy"]) * scale_factor
+            rw = float(marker["w"]) * scale_factor
+            rh = float(marker["h"]) * scale_factor
+            angle_rad = float(marker.get("a", "0"))
+            half_w, half_h = rw / 2, rh / 2
+            cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+            corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+            rotated = [
+                (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+                for dx, dy in corners
+            ]
+            draw.polygon(rotated, outline=line_color, width=line_width)
+            continue
+
+        if svg_d.startswith("__text__"):
+            marker = _parse_marker(svg_d)
+            cx = float(marker["cx"]) * scale_factor
+            cy = float(marker["cy"]) * scale_factor
+            char = marker.get("c", "?")
+            if char == "_":
+                char = " "
+            draw.text((cx, cy), char, fill=line_color, anchor="mm")
+            continue
+
         if path.is_bezier and path.cubic_segments:
             pts = discretize_segments(path.cubic_segments, steps_per_segment=6)
         else:
@@ -154,3 +318,4 @@ def export_png(
             draw.line(scaled_pts, fill=line_color, width=line_width, joint="curve")
 
     canvas.save(output_path, "PNG")
+

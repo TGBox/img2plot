@@ -50,6 +50,19 @@ class PlotParameters:
     cross_hatch: bool = False  # Add a second orthogonal pass for deep shadows
     hatching_min_length: int = 6  # Minimum length of hatching strokes
 
+    # Formen-Modus (Shapes)
+    use_shapes: bool = False
+    shape_type: str = "dots"           # dots|circles|rects|triangles|lines|stars|diamonds|hexagons|spirals|hearts|ascii
+    shape_placement: str = "grid"      # "grid" | "random"
+    shape_min_size: float = 2.0        # Minimale Formgröße in Pixel (für helle Bereiche)
+    shape_max_size: float = 20.0       # Maximale Formgröße in Pixel (für dunkle Bereiche)
+    shape_density: float = 0.6         # Dichte 0.0–2.0 (skaliert Rastergröße/Anzahl)
+    shape_rotation_mode: str = "random"  # "none" | "random" | "gradient" | "mixed"
+    shape_gradient_align: float = 0.5   # Blend: 0=rein zufällig, 1=rein gradientenausgerichtet
+    shape_size_by_brightness: bool = True    # Helligkeit → Größe (dunkel = groß)
+    shape_density_by_brightness: bool = True  # Helligkeit → Dichte (dunkel = mehr Formen)
+    shape_ascii_charset: str = "@#S%?*+;:,. "  # Zeichensatz für ASCII-Modus (dunkel → hell)
+
     # Export & physical page setup
     stroke_color: str = "#1a1a1a"
     stroke_width_mm: float = 0.35

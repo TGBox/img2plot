@@ -29,9 +29,14 @@ class PreviewRenderData:
     result: EngineResult
     cached_vector_path: QPainterPath
     cached_hatch_path: QPainterPath
+    cached_shape_path: QPainterPath = None  # type: ignore[assignment]
     pixmap_preprocess_img: Optional[QImage] = None
     pixmap_sobel_img: Optional[QImage] = None
     cached_rendered_img: Optional[QImage] = None
+
+    def __post_init__(self):
+        if self.cached_shape_path is None:
+            self.cached_shape_path = QPainterPath()
 
 
 @dataclass
@@ -199,6 +204,7 @@ class VectorizationWorker(QThread):
         # 2. Build QPainterPaths in background
         v_path = QPainterPath()
         h_path = QPainterPath()
+        s_path = QPainterPath()  # Shape strokes
 
         for idx, stroke in enumerate(result.paths):
             if idx % 100 == 0:
@@ -206,7 +212,13 @@ class VectorizationWorker(QThread):
                 if self._is_task_cancelled():
                     return
 
-            target_path = h_path if stroke.is_hatch else v_path
+            if stroke.is_shape:
+                target_path = s_path
+            elif stroke.is_hatch:
+                target_path = h_path
+            else:
+                target_path = v_path
+
             if stroke.is_bezier and stroke.cubic_segments:
                 p1 = stroke.cubic_segments[0][0]
                 target_path.moveTo(p1[0], p1[1])
@@ -218,6 +230,15 @@ class VectorizationWorker(QThread):
                     target_path.moveTo(pts[0][0], pts[0][1])
                     for pt in pts[1:]:
                         target_path.lineTo(pt[0], pt[1])
+                elif len(pts) == 1:
+                    # Single-point shapes (circles, rects, text) - draw a tiny mark for preview
+                    md = stroke.shape_metadata
+                    if md.get("type") == "circle":
+                        r = float(md.get("r", 2.0))
+                        target_path.addEllipse(pts[0][0] - r, pts[0][1] - r, r * 2, r * 2)
+                    else:
+                        target_path.moveTo(pts[0][0] - 1, pts[0][1])
+                        target_path.lineTo(pts[0][0] + 1, pts[0][1])
 
         if self._is_task_cancelled():
             return
@@ -252,10 +273,10 @@ class VectorizationWorker(QThread):
                 if qimg_prep:
                     painter.drawImage(img_rect, qimg_prep)
                 painter.setOpacity(task.overlay_opacity)
-                self._draw_paths(painter, v_path, h_path, task.paper_style, task.display_mode, zoom=scale_factor)
+                self._draw_paths(painter, v_path, h_path, task.paper_style, task.display_mode, zoom=scale_factor, s_path=s_path)
                 painter.setOpacity(1.0)
             else:
-                self._draw_paths(painter, v_path, h_path, task.paper_style, task.display_mode, zoom=scale_factor)
+                self._draw_paths(painter, v_path, h_path, task.paper_style, task.display_mode, zoom=scale_factor, s_path=s_path)
 
             painter.end()
             cached_rendered_img = cache_img
@@ -267,6 +288,7 @@ class VectorizationWorker(QThread):
             result=result,
             cached_vector_path=v_path,
             cached_hatch_path=h_path,
+            cached_shape_path=s_path,
             pixmap_preprocess_img=qimg_prep,
             pixmap_sobel_img=qimg_sobel,
             cached_rendered_img=cached_rendered_img,
@@ -283,6 +305,7 @@ class VectorizationWorker(QThread):
         paper_style: str,
         display_mode: str,
         zoom: float = 1.0,
+        s_path: Optional[QPainterPath] = None,
     ) -> None:
         stroke_color = QColor("#111111")
         if paper_style == "dark" and display_mode == "vector":
@@ -295,6 +318,15 @@ class VectorizationWorker(QThread):
             hatch_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(hatch_pen)
             painter.drawPath(h_path)
+
+        if s_path is not None and not s_path.isEmpty():
+            shape_pen = QPen(stroke_color)
+            shape_pen.setWidthF(max(0.7, 1.0 / math.sqrt(max(0.1, zoom))))
+            shape_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            shape_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(shape_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(s_path)
 
         if not v_path.isEmpty():
             vector_pen = QPen(stroke_color)

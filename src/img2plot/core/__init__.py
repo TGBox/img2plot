@@ -14,6 +14,7 @@ from .presets import (
 )
 from .bezier import fit_cubic_spline, segments_to_svg_path
 from .hatching import generate_hatching
+from .shapes import generate_shapes
 from .engine import PlotEngine, StrokePath, PlotStats, EngineResult
 from .exporter import export_svg, export_png
 
@@ -29,6 +30,7 @@ __all__ = [
     "fit_cubic_spline",
     "segments_to_svg_path",
     "generate_hatching",
+    "generate_shapes",
     "PlotEngine",
     "StrokePath",
     "PlotStats",

@@ -33,6 +33,8 @@ class StrokePath:
     cubic_segments: List[CubicSegment] = field(default_factory=list)
     svg_d: str = ""
     is_hatch: bool = False
+    is_shape: bool = False
+    shape_metadata: dict = field(default_factory=dict)
 
     def length(self) -> float:
         """Calculate approximate length in pixels."""
@@ -63,6 +65,7 @@ class PlotStats:
     total_strokes: int = 0
     contour_strokes: int = 0
     hatch_strokes: int = 0
+    shape_strokes: int = 0
     total_length_px: float = 0.0
     pen_up_distance_px: float = 0.0
     elapsed_time_sec: float = 0.0
@@ -549,6 +552,23 @@ class PlotEngine:
                 )
                 hatch_count += 1
 
+        # 6. Shape generation if requested
+        shape_count = 0
+        if self.params.use_shapes:
+            from .shapes import generate_shapes
+            update_progress(0.85, "Formen generieren...")
+            shape_strokes = generate_shapes(
+                gray_image=norm_gray,
+                grad_x=grad_x,
+                grad_y=grad_y,
+                params=self.params,
+                is_cancelled=is_cancelled,
+            )
+            for ss in shape_strokes:
+                ss.is_shape = True
+                paths.append(ss)
+                shape_count += 1
+
         update_progress(0.90, "Wegoptimierung (Plotter-Sortierung)...")
 
         pen_up_dist = 0.0
@@ -562,6 +582,7 @@ class PlotEngine:
             total_strokes=len(paths),
             contour_strokes=contour_count,
             hatch_strokes=hatch_count,
+            shape_strokes=shape_count,
             total_length_px=total_drawing_len,
             pen_up_distance_px=pen_up_dist,
             elapsed_time_sec=elapsed,

@@ -269,6 +269,28 @@ QPushButton#dangerButton:hover {
     background-color: #b91c1c;
 }
 
+QPushButton#randomizeButton {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #7c3aed, stop:1 #db2777);
+    color: #ffffff;
+    border: 1px solid #a855f7;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+QPushButton#randomizeButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #6d28d9, stop:1 #be185d);
+    border-color: #c084fc;
+}
+
+QPushButton#randomizeButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #5b21b6, stop:1 #9d174d);
+}
+
 QLineEdit {
     background-color: #09090b;
     color: #f4f4f5;
