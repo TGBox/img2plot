@@ -24,6 +24,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         line_mode="straight",
         use_hatching=False,
         sort_paths=False,
+        two_opt=False,
     ),
     "Feine Details": PlotParameters(
         termination_ratio=0.18,
@@ -39,6 +40,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         bezier_smoothness=0.25,
         use_hatching=False,
         sort_paths=False,
+        two_opt=False,
     ),
     "Künstlerische Skizze": PlotParameters(
         termination_ratio=0.24,
@@ -54,6 +56,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         bezier_smoothness=0.45,
         use_hatching=False,
         sort_paths=False,
+        two_opt=False,
     ),
     "Starke Konturen": PlotParameters(
         termination_ratio=0.38,
@@ -67,6 +70,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         line_mode="straight",
         use_hatching=False,
         sort_paths=False,
+        two_opt=False,
     ),
     "Klassische Gravur (Schraffur)": PlotParameters(
         termination_ratio=0.25,
@@ -89,6 +93,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         cross_hatch=True,
         hatch_wobble=0.15,
         sort_paths=False,
+        two_opt=False,
     ),
     "Schnell-Entwurf": PlotParameters(
         termination_ratio=0.45,
@@ -103,6 +108,7 @@ DEFAULT_PRESETS: Dict[str, PlotParameters] = {
         line_mode="straight",
         use_hatching=False,
         sort_paths=False,
+        two_opt=False,
     ),
 }
 

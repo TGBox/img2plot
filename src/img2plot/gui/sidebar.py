@@ -903,7 +903,23 @@ class SidebarWidget(QWidget):
             "Standardmäßig für schnelle Live-Vorschau deaktiviert."
         )
         self.chk_tsp.stateChanged.connect(self._emit_param_change)
+        self.chk_tsp.stateChanged.connect(self._on_tsp_toggled)
         layout.addWidget(self.chk_tsp)
+
+        # 2-opt Verfeinerung: nur sinnvoll und sichtbar, wenn die
+        # Wegoptimierung selbst aktiv ist. Deutlich langsamer, daher
+        # standardmäßig deaktiviert und nur für den finalen Export gedacht.
+        self.chk_two_opt = QCheckBox("2-opt Feinoptimierung (langsamer, kürzere Leerwege)")
+        self.chk_two_opt.setChecked(False)
+        self.chk_two_opt.setEnabled(False)
+        self.chk_two_opt.setVisible(False)
+        self.chk_two_opt.setToolTip(
+            "Verfeinert die sortierten Pfade zusätzlich per 2-opt.\n"
+            "Reduziert Leerfahrten weiter, kann bei vielen Linien aber\n"
+            "spürbar länger dauern. Für die Live-Vorschau nicht empfohlen."
+        )
+        self.chk_two_opt.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_two_opt)
 
         self.layout_content.addWidget(box)
 
@@ -998,6 +1014,7 @@ class SidebarWidget(QWidget):
         p.stroke_width_mm = self.slider_stroke_w.get_value()
         p.stroke_color = self.params.stroke_color
         p.sort_paths = self.chk_tsp.isChecked()
+        p.two_opt = self.chk_two_opt.isChecked() and p.sort_paths
 
         return p
 
@@ -1067,6 +1084,9 @@ class SidebarWidget(QWidget):
         self.params.stroke_color = p.stroke_color
         self.btn_color.setStyleSheet(f"background-color: {p.stroke_color}; color: #ffffff;")
         self.chk_tsp.setChecked(p.sort_paths)
+        self.chk_two_opt.setEnabled(p.sort_paths)
+        self.chk_two_opt.setVisible(p.sort_paths)
+        self.chk_two_opt.setChecked(p.two_opt)
 
         self._block_signals = False
 
@@ -1256,3 +1276,11 @@ class SidebarWidget(QWidget):
 
     def _on_hatching_toggled(self, state: int) -> None:
         self._emit_param_change()
+
+    def _on_tsp_toggled(self, state: int) -> None:
+        """2-opt only makes sense on top of an already sorted path set."""
+        enabled = self.chk_tsp.isChecked()
+        self.chk_two_opt.setEnabled(enabled)
+        self.chk_two_opt.setVisible(enabled)
+        if not enabled:
+            self.chk_two_opt.setChecked(False)

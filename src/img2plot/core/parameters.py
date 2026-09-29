@@ -71,6 +71,7 @@ class PlotParameters:
     page_height_mm: float = 297.0
     margin_mm: float = 10.0
     sort_paths: bool = False  # TSP/Nearest-neighbor sort to minimize pen-up movements (disabled by default for fast preview)
+    two_opt: bool = False  # Additional 2-opt refinement pass after sort_paths (slower, further reduces pen-up travel)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert parameters to a dictionary."""
