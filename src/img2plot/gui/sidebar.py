@@ -371,6 +371,15 @@ class SidebarWidget(QWidget):
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.lbl_status)
 
+        # Randomize button (prominent near calculation controls)
+        self.btn_randomize_top = QPushButton("🎲  Alle Einstellungen zufällig würfeln")
+        self.btn_randomize_top.setObjectName("randomizeButton")
+        self.btn_randomize_top.setToolTip(
+            "Würfelt ALLE Einstellungen (Filter, Linienerkennung, Zeichenstil, Schraffur, Formen und Strich) zufällig mit sinnvollen Werten."
+        )
+        self.btn_randomize_top.clicked.connect(self._randomize_all_params)
+        layout.addWidget(self.btn_randomize_top)
+
         self.layout_content.addWidget(box)
 
     def _build_preprocessing_section(self) -> None:
@@ -725,12 +734,12 @@ class SidebarWidget(QWidget):
         layout.addWidget(self.slider_shape_gradient_align)
 
         # Randomize button
-        self.btn_randomize = QPushButton("\U0001F3B2  Zuf\u00e4llige Einstellungen")
+        self.btn_randomize = QPushButton("🎲  Alle Einstellungen zufällig würfeln")
         self.btn_randomize.setObjectName("randomizeButton")
         self.btn_randomize.setToolTip(
-            "Setzt alle Formen-Parameter auf erlaubte, zuf\u00e4llige Werte und berechnet die Vorschau neu."
+            "Setzt ALLE Parameter (Vorverarbeitung, Linien, Zeichenstil, Schraffur, Formen und Strichstärke) auf zufällige, erlaubte Werte und berechnet die Vorschau neu."
         )
-        self.btn_randomize.clicked.connect(self._randomize_shape_params)
+        self.btn_randomize.clicked.connect(self._randomize_all_params)
         layout.addWidget(self.btn_randomize)
 
         self.layout_content.addWidget(box)
@@ -747,42 +756,99 @@ class SidebarWidget(QWidget):
         self.slider_shape_gradient_align.setVisible(idx == 3)  # 3 = Gemischt
         self._emit_param_change()
 
-    def _randomize_shape_params(self) -> None:
-        """Randomize all shape mode parameters with valid values and trigger recalculation."""
+    def _randomize_all_params(self) -> None:
+        """Randomize ALL parameters across preprocessing, lines, style, hatching, shapes, and plotter options."""
         import random
         self._block_signals = True
 
-        # Enable shapes if not already on
-        self.chk_shapes.setChecked(True)
+        # --- 1. Vorverarbeitung (Filter) ---
+        self.chk_clahe.setChecked(random.random() < 0.75)
+        self.slider_clahe_kernel.set_value(random.choice([16, 24, 32, 40, 48, 56]))
+        self.chk_blur.setChecked(random.random() < 0.70)
+        self.slider_blur_sigma.set_value(round(random.uniform(0.4, 2.5), 1))
 
-        # Random shape type
-        n_types = self.combo_shape_type.count()
-        self.combo_shape_type.setCurrentIndex(random.randint(0, n_types - 1))
+        # --- 2. Linienerkennung & Dichte ---
+        self.slider_term_ratio.set_value(round(random.uniform(0.12, 0.45), 2))
+        self.slider_continue_thresh.set_value(round(random.uniform(0.004, 0.030) / 0.002) * 0.002)
+        self.slider_min_length.set_value(random.randint(10, 45))
+        self.slider_max_angle.set_value(round(random.uniform(12.0, 45.0), 0))
+        self.slider_lpf.set_value(round(random.uniform(0.02, 0.12), 2))
 
-        # Random placement
-        self.combo_shape_placement.setCurrentIndex(random.randint(0, 1))
+        # --- 3. Zeichenstil & Bézier-Kurven ---
+        self.combo_line_mode.setCurrentIndex(random.choice([0, 1]))
+        self.slider_bezier_smooth.set_value(round(random.uniform(0.15, 0.65) / 0.05) * 0.05)
+        self.slider_sample_step.set_value(random.randint(1, 4))
 
-        # Random size range (ensure min < max)
-        min_s = random.uniform(1.0, 12.0)
-        max_s = random.uniform(min_s + 3.0, 45.0)
+        # --- 4. Schraffur (Hatching) ---
+        self.chk_hatching.setChecked(random.random() < 0.50)
+        self.combo_hatch_mode.setCurrentIndex(random.choice([0, 1]))
+        self.slider_hatch_curve.set_value(round(random.uniform(0.2, 0.95), 2))
+        self.slider_hatch_wobble.set_value(random.choice([0.0, 0.0, 0.2, 0.5, 0.8, 1.2]))
+        self.slider_hatch_thresh.set_value(round(random.uniform(0.18, 0.50), 2))
+        self.slider_hatch_spacing.set_value(random.randint(6, 22))
+        self.slider_hatch_angle.set_value(random.choice([0.0, 25.0, 45.0, 60.0, 75.0, 90.0, 120.0, 135.0, 150.0]))
+        self.chk_cross_hatch.setChecked(random.random() < 0.35)
+
+        # --- 5. Formen-Modus (Shapes) ---
+        self.chk_shapes.setChecked(random.random() < 0.55)
+        n_types = len(self._SHAPE_TYPE_VALUES)
+        type_idx = random.randint(0, n_types - 1)
+        self.combo_shape_type.setCurrentIndex(type_idx)
+
+        self.combo_shape_placement.setCurrentIndex(random.choice([0, 1]))
+
+        min_s = round(random.uniform(1.0, 10.0), 1)
+        max_s = round(random.uniform(min_s + 3.0, 45.0), 0)
         self.slider_shape_min_size.set_value(min_s)
         self.slider_shape_max_size.set_value(max_s)
 
-        # Random density
-        self.slider_shape_density.set_value(random.uniform(0.15, 1.6))
+        self.slider_shape_density.set_value(round(random.uniform(0.25, 1.6), 2))
 
-        # Random brightness options (70% chance each is on)
-        self.chk_shape_size_by_bright.setChecked(random.random() > 0.3)
-        self.chk_shape_density_by_bright.setChecked(random.random() > 0.3)
+        self.chk_shape_size_by_bright.setChecked(random.random() < 0.80)
+        self.chk_shape_density_by_bright.setChecked(random.random() < 0.80)
 
-        # Random rotation mode
         rot_idx = random.randint(0, 3)
         self.combo_shape_rotation.setCurrentIndex(rot_idx)
-        self.slider_shape_gradient_align.set_value(random.uniform(0.0, 1.0))
+        self.slider_shape_gradient_align.set_value(round(random.uniform(0.2, 0.9), 2))
         self.slider_shape_gradient_align.setVisible(rot_idx == 3)
+
+        is_ascii = (type_idx == len(self._SHAPE_TYPE_VALUES) - 1)
+        self.lbl_ascii_charset.setVisible(is_ascii)
+        self.edit_ascii_charset.setVisible(is_ascii)
+        if is_ascii:
+            ascii_options = [
+                "@#S%?*+;:,. ",
+                "@%#*+=-:. ",
+                "01 ",
+                "█▓▒░ ",
+                "+-· ",
+                "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ",
+            ]
+            self.edit_ascii_charset.setText(random.choice(ascii_options))
+
+        # --- 6. Stift- und Plotter-Optionen ---
+        self.slider_stroke_w.set_value(random.choice([0.25, 0.3, 0.35, 0.4, 0.5]))
+        ink_colors = [
+            "#1a1a1a",  # Deep Charcoal
+            "#1e3a8a",  # Blueprint Navy
+            "#0f766e",  # Deep Teal
+            "#b91c1c",  # Crimson Vermilion
+            "#7e22ce",  # Royal Violet
+            "#c2410c",  # Burnt Orange
+            "#374151",  # Slate Graphite
+            "#047857",  # Emerald Green
+            "#4338ca",  # Indigo
+        ]
+        chosen_color = random.choice(ink_colors)
+        self.params.stroke_color = chosen_color
+        self.btn_color.setStyleSheet(f"background-color: {chosen_color}; color: #ffffff;")
 
         self._block_signals = False
         self._emit_param_change()
+
+    def _randomize_shape_params(self) -> None:
+        """Alias for _randomize_all_params."""
+        self._randomize_all_params()
 
     def _build_page_export_section(self) -> None:
         box = QGroupBox("Papier & Plotter-Optionen")

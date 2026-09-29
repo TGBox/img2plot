@@ -292,6 +292,104 @@ def optimize_pen_travel(paths: List[StrokePath]) -> Tuple[List[StrokePath], floa
 
     return sorted_paths, total_pen_up
 
+def _reverse_stroke(chosen: "StrokePath") -> "StrokePath":
+    """Gibt eine Kopie von `chosen` mit umgekehrter Richtung zurück
+    (identische Logik wie bisher in optimize_pen_travel)."""
+    rev_pts = list(reversed(chosen.points))
+    if chosen.is_bezier:
+        segs = fit_cubic_spline(rev_pts, tension=0.35)
+        return StrokePath(
+            points=rev_pts,
+            is_bezier=True,
+            cubic_segments=segs,
+            svg_d=segments_to_svg_path(segs),
+            is_hatch=chosen.is_hatch,
+        )
+    return StrokePath(
+        points=rev_pts,
+        is_bezier=False,
+        svg_d=f"M {rev_pts[0][0]:.2f},{rev_pts[0][1]:.2f} L {rev_pts[-1][0]:.2f},{rev_pts[-1][1]:.2f}",
+        is_hatch=chosen.is_hatch,
+    )
+
+
+def two_opt_pen_travel(
+    paths: List[StrokePath],
+    start_pos: Point2D = (0.0, 0.0),
+    max_passes: int = 20,
+    time_budget_sec: Optional[float] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+) -> Tuple[List[StrokePath], float]:
+    """
+    Verbessert eine bereits (z. B. per Nearest-Neighbor) sortierte Liste von
+    StrokePaths per 2-opt: Teilsequenzen werden umgedreht (inkl. der
+    Einzelrichtung jeder Linie), wenn das die Pen-Up-Weglänge verkuerzt.
+
+    Erwartet, dass `paths` bereits in einer Reihenfolge vorliegt (z. B. das
+    Ergebnis von optimize_pen_travel). Gibt (neue_liste, neue_pen_up_distanz)
+    zurueck.
+    """
+    n = len(paths)
+    if n < 3:
+        total = 0.0
+        pos = start_pos
+        for p in paths:
+            total += math.hypot(p.points[0][0] - pos[0], p.points[0][1] - pos[1])
+            pos = p.points[-1]
+        return paths, total
+
+    paths = list(paths)
+    t0 = time.perf_counter()
+
+    for _ in range(max_passes):
+        if is_cancelled and is_cancelled():
+            break
+        if time_budget_sec is not None and (time.perf_counter() - t0) > time_budget_sec:
+            break
+
+        improved = False
+        i = 0
+        while i < n:
+            prev_end = paths[i - 1].points[-1] if i > 0 else start_pos
+            best_k = -1
+            best_delta = -1e-9  # nur echte Verbesserungen
+
+            for j in range(i, n):
+                s_i = paths[i].points[0]
+                e_j = paths[j].points[-1]
+                next_start = paths[j + 1].points[0] if j + 1 < n else None
+
+                old = math.hypot(prev_end[0] - s_i[0], prev_end[1] - s_i[1])
+                new = math.hypot(prev_end[0] - e_j[0], prev_end[1] - e_j[1])
+                if next_start is not None:
+                    old += math.hypot(paths[j].points[-1][0] - next_start[0],
+                                       paths[j].points[-1][1] - next_start[1])
+                    new += math.hypot(paths[i].points[0][0] - next_start[0],
+                                       paths[i].points[0][1] - next_start[1])
+
+                delta = new - old
+                if delta < best_delta:
+                    best_delta = delta
+                    best_k = j
+
+            if best_k >= 0:
+                segment = paths[i:best_k + 1]
+                reversed_segment = [_reverse_stroke(s) for s in reversed(segment)]
+                paths[i:best_k + 1] = reversed_segment
+                improved = True
+
+            i += 1
+
+        if not improved:
+            break
+
+    total = 0.0
+    pos = start_pos
+    for p in paths:
+        total += math.hypot(p.points[0][0] - pos[0], p.points[0][1] - pos[1])
+        pos = p.points[-1]
+
+    return paths, total
 
 class PlotEngine:
     """Main image processing and line extraction engine."""
