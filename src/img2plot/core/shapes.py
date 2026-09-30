@@ -22,6 +22,8 @@ import numpy as np
 from .parameters import PlotParameters
 from .engine import StrokePath
 
+from .bezier import CubicSegment
+
 Point2D = tuple[float, float]
 
 
@@ -201,9 +203,21 @@ def _rotate_pts(pts: List[Point2D], cx: float, cy: float, angle: float) -> List[
     return result
 
 
-def _stroke_from_path(svg_d: str, pts: List[Point2D]) -> StrokePath:
+def _stroke_from_path(
+    svg_d: str,
+    pts: List[Point2D],
+    close: bool = False,
+    shape_metadata: Optional[dict] = None,
+) -> StrokePath:
     """Create a StrokePath from an svg_d string and representative point list."""
-    return StrokePath(points=pts if pts else [(0.0, 0.0)], svg_d=svg_d)
+    final_pts = list(pts) if pts else [(0.0, 0.0)]
+    if close and len(final_pts) >= 2 and final_pts[0] != final_pts[-1]:
+        final_pts.append(final_pts[0])
+    return StrokePath(
+        points=final_pts,
+        svg_d=svg_d,
+        shape_metadata=shape_metadata or {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +259,7 @@ def _make_rect(cx: float, cy: float, size: float, angle: float = 0.0) -> Optiona
 
 
 def _make_triangle(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
-    """Equilateral triangle."""
+    """Equilateral triangle (closed polygon)."""
     r = max(0.5, size / 2.0)
     raw: List[Point2D] = [
         (cx, cy - r),
@@ -254,7 +268,12 @@ def _make_triangle(cx: float, cy: float, size: float, angle: float = 0.0) -> Opt
     ]
     pts = _rotate_pts(raw, cx, cy, angle)
     svg_d = _pts_to_path(pts, close=True)
-    return _stroke_from_path(svg_d, pts)
+    return _stroke_from_path(
+        svg_d,
+        pts,
+        close=True,
+        shape_metadata={"type": "triangle", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_line_seg(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
@@ -265,11 +284,16 @@ def _make_line_seg(cx: float, cy: float, size: float, angle: float = 0.0) -> Opt
     x1 = cx + half * math.cos(angle)
     y1 = cy + half * math.sin(angle)
     svg_d = f"M {x0:.2f},{y0:.2f} L {x1:.2f},{y1:.2f}"
-    return _stroke_from_path(svg_d, [(x0, y0), (x1, y1)])
+    return _stroke_from_path(
+        svg_d,
+        [(x0, y0), (x1, y1)],
+        close=False,
+        shape_metadata={"type": "line", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_star(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
-    """Five-pointed star."""
+    """Five-pointed star (closed polygon)."""
     outer = max(0.5, size / 2.0)
     inner = outer * 0.4
     pts_raw: List[Point2D] = []
@@ -278,20 +302,36 @@ def _make_star(cx: float, cy: float, size: float, angle: float = 0.0) -> Optiona
         a = angle + math.pi * i / 5.0 - math.pi / 2.0
         pts_raw.append((cx + r * math.cos(a), cy + r * math.sin(a)))
     svg_d = _pts_to_path(pts_raw, close=True)
-    return _stroke_from_path(svg_d, pts_raw)
+    return _stroke_from_path(
+        svg_d,
+        pts_raw,
+        close=True,
+        shape_metadata={"type": "star", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_diamond(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
-    """Rhombus / diamond shape."""
+    """Rhombus / diamond shape with classic balanced proportions (closed 4-sided polygon)."""
     r = max(0.5, size / 2.0)
-    raw: List[Point2D] = [(cx, cy - r), (cx + r * 0.6, cy), (cx, cy + r), (cx - r * 0.6, cy)]
+    # Balanced diamond / rhombus: aspect ratio ~ 0.75:1 (width:height)
+    raw: List[Point2D] = [
+        (cx, cy - r),
+        (cx + r * 0.75, cy),
+        (cx, cy + r),
+        (cx - r * 0.75, cy),
+    ]
     pts = _rotate_pts(raw, cx, cy, angle)
     svg_d = _pts_to_path(pts, close=True)
-    return _stroke_from_path(svg_d, pts)
+    return _stroke_from_path(
+        svg_d,
+        pts,
+        close=True,
+        shape_metadata={"type": "diamond", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_hexagon(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
-    """Regular hexagon."""
+    """Regular hexagon (closed polygon)."""
     r = max(0.5, size / 2.0)
     pts_raw: List[Point2D] = [
         (cx + r * math.cos(angle + math.pi * i / 3.0),
@@ -299,7 +339,12 @@ def _make_hexagon(cx: float, cy: float, size: float, angle: float = 0.0) -> Opti
         for i in range(6)
     ]
     svg_d = _pts_to_path(pts_raw, close=True)
-    return _stroke_from_path(svg_d, pts_raw)
+    return _stroke_from_path(
+        svg_d,
+        pts_raw,
+        close=True,
+        shape_metadata={"type": "hexagon", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_spiral(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
@@ -333,26 +378,64 @@ def _make_spiral(cx: float, cy: float, size: float, angle: float = 0.0) -> Optio
         i += 3
 
     svg_d = " ".join(path_parts)
-    return _stroke_from_path(svg_d, pts)
+    return _stroke_from_path(
+        svg_d,
+        pts,
+        close=False,
+        shape_metadata={"type": "spiral", "cx": cx, "cy": cy, "size": size, "angle": angle},
+    )
 
 
 def _make_heart(cx: float, cy: float, size: float, angle: float = 0.0) -> Optional[StrokePath]:
-    """Heart shape via cubic Bezier curves."""
+    """Heart shape via 4 cubic Bezier curves with smooth lobes, cleft, and clean point."""
     s = max(0.5, size / 2.0)
-    # Two bumps on top, point at bottom
-    svg_d = " ".join([
-        f"M {cx:.2f},{cy - s * 0.25:.2f}",
-        f"C {cx + s * 0.1:.2f},{cy - s:.2f} {cx + s:.2f},{cy - s * 0.5:.2f} {cx + s:.2f},{cy:.2f}",
-        f"C {cx + s:.2f},{cy + s * 0.6:.2f} {cx:.2f},{cy + s * 0.9:.2f} {cx:.2f},{cy + s:.2f}",
-        f"C {cx:.2f},{cy + s * 0.9:.2f} {cx - s:.2f},{cy + s * 0.6:.2f} {cx - s:.2f},{cy:.2f}",
-        f"C {cx - s:.2f},{cy - s * 0.5:.2f} {cx - s * 0.1:.2f},{cy - s:.2f} {cx:.2f},{cy - s * 0.25:.2f}",
-        "Z",
-    ])
-    # Approximate bounding points for QPainterPath rendering fallback
-    pts: List[Point2D] = [(cx, cy - s * 0.25), (cx + s, cy), (cx, cy + s), (cx - s, cy)]
-    pts = _rotate_pts(pts, cx, cy, angle)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+
+    # 4 cubic Bezier segments defining a classic, beautifully proportioned heart:
+    # Segment 1: Top cleft -> right lobe apex & side
+    # Segment 2: Right lobe side -> bottom point
+    # Segment 3: Bottom point -> left lobe side
+    # Segment 4: Left lobe side -> top cleft
+    raw_segments = [
+        ((0.0, -s * 0.25), (s * 0.25, -s * 0.9), (s * 0.95, -s * 0.65), (s * 0.95, -s * 0.1)),
+        ((s * 0.95, -s * 0.1), (s * 0.95, s * 0.4), (s * 0.4, s * 0.75), (0.0, s * 0.95)),
+        ((0.0, s * 0.95), (-s * 0.4, s * 0.75), (-s * 0.95, s * 0.4), (-s * 0.95, -s * 0.1)),
+        ((-s * 0.95, -s * 0.1), (-s * 0.95, -s * 0.65), (-s * 0.25, -s * 0.9), (0.0, -s * 0.25)),
+    ]
+
+    rotated_segs: List[CubicSegment] = []
+    svg_parts: List[str] = []
+    pts: List[Point2D] = []
+
+    steps_per_seg = max(6, int(s / 2))
+
+    for i, (p0, c1, c2, p1) in enumerate(raw_segments):
+        rp0 = (cx + p0[0] * cos_a - p0[1] * sin_a, cy + p0[0] * sin_a + p0[1] * cos_a)
+        rc1 = (cx + c1[0] * cos_a - c1[1] * sin_a, cy + c1[0] * sin_a + c1[1] * cos_a)
+        rc2 = (cx + c2[0] * cos_a - c2[1] * sin_a, cy + c2[0] * sin_a + c2[1] * cos_a)
+        rp1 = (cx + p1[0] * cos_a - p1[1] * sin_a, cy + p1[0] * sin_a + p1[1] * cos_a)
+        rotated_segs.append((rp0, rc1, rc2, rp1))
+
+        if i == 0:
+            svg_parts.append(f"M {rp0[0]:.2f},{rp0[1]:.2f}")
+        svg_parts.append(f"C {rc1[0]:.2f},{rc1[1]:.2f} {rc2[0]:.2f},{rc2[1]:.2f} {rp1[0]:.2f},{rp1[1]:.2f}")
+
+        # Discretize for points list (used in fallback drawing, line plotters, TSP)
+        for step in range(steps_per_seg + (1 if i == len(raw_segments) - 1 else 0)):
+            t = step / steps_per_seg
+            u = 1.0 - t
+            px = u**3 * rp0[0] + 3 * u**2 * t * rc1[0] + 3 * u * t**2 * rc2[0] + t**3 * rp1[0]
+            py = u**3 * rp0[1] + 3 * u**2 * t * rc1[1] + 3 * u * t**2 * rc2[1] + t**3 * rp1[1]
+            pts.append((px, py))
+
+    svg_parts.append("Z")
+    svg_d = " ".join(svg_parts)
+
     return StrokePath(
         points=pts,
+        is_bezier=True,
+        cubic_segments=rotated_segs,
         svg_d=svg_d,
         shape_metadata={"type": "heart", "cx": cx, "cy": cy, "size": s, "angle": angle},
     )

@@ -217,6 +217,8 @@ def export_svg(
                 segs_str.append(
                     f"C {c1_t[0]:.3f},{c1_t[1]:.3f} {c2_t[0]:.3f},{c2_t[1]:.3f} {p2_t[0]:.3f},{p2_t[1]:.3f}"
                 )
+            if path.svg_d.strip().endswith("Z") or (path.cubic_segments and path.cubic_segments[0][0] == path.cubic_segments[-1][-1]):
+                segs_str.append("Z")
             d = " ".join(segs_str)
             tag = f'    <path d="{d}" />'
         elif svg_d and (svg_d[0] in ("M", "C") or svg_d.startswith("M ")):

@@ -278,6 +278,8 @@ def optimize_pen_travel(paths: List[StrokePath]) -> Tuple[List[StrokePath], floa
                     cubic_segments=segs,
                     svg_d=segments_to_svg_path(segs),
                     is_hatch=chosen.is_hatch,
+                    is_shape=chosen.is_shape,
+                    shape_metadata=chosen.shape_metadata,
                 )
             else:
                 chosen = StrokePath(
@@ -285,6 +287,8 @@ def optimize_pen_travel(paths: List[StrokePath]) -> Tuple[List[StrokePath], floa
                     is_bezier=False,
                     svg_d=f"M {rev_pts[0][0]:.2f},{rev_pts[0][1]:.2f} L {rev_pts[-1][0]:.2f},{rev_pts[-1][1]:.2f}",
                     is_hatch=chosen.is_hatch,
+                    is_shape=chosen.is_shape,
+                    shape_metadata=chosen.shape_metadata,
                 )
 
         sorted_paths.append(chosen)
@@ -304,12 +308,16 @@ def _reverse_stroke(chosen: "StrokePath") -> "StrokePath":
             cubic_segments=segs,
             svg_d=segments_to_svg_path(segs),
             is_hatch=chosen.is_hatch,
+            is_shape=chosen.is_shape,
+            shape_metadata=chosen.shape_metadata,
         )
     return StrokePath(
         points=rev_pts,
         is_bezier=False,
         svg_d=f"M {rev_pts[0][0]:.2f},{rev_pts[0][1]:.2f} L {rev_pts[-1][0]:.2f},{rev_pts[-1][1]:.2f}",
         is_hatch=chosen.is_hatch,
+        is_shape=chosen.is_shape,
+        shape_metadata=chosen.shape_metadata,
     )
 
 

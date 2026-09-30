@@ -66,6 +66,7 @@ class CanvasView(QWidget):
         self.pixmap_sobel: Optional[QPixmap] = None
         self.cached_vector_path: Optional[QPainterPath] = None
         self.cached_hatch_path: Optional[QPainterPath] = None
+        self.cached_shape_path: Optional[QPainterPath] = None
         self.cached_rendered_pixmap: Optional[QPixmap] = None
 
     def set_preview_data(self, data: PreviewRenderData) -> None:
@@ -73,6 +74,7 @@ class CanvasView(QWidget):
         self.result = data.result
         self.cached_vector_path = data.cached_vector_path
         self.cached_hatch_path = data.cached_hatch_path
+        self.cached_shape_path = getattr(data, "cached_shape_path", None)
         self.pixmap_preprocess = QPixmap.fromImage(data.pixmap_preprocess_img) if data.pixmap_preprocess_img else None
         self.pixmap_sobel = QPixmap.fromImage(data.pixmap_sobel_img) if data.pixmap_sobel_img else None
         self.cached_rendered_pixmap = QPixmap.fromImage(data.cached_rendered_img) if data.cached_rendered_img else None
@@ -103,23 +105,41 @@ class CanvasView(QWidget):
         # Build QPainterPath for vector lines
         v_path = QPainterPath()
         h_path = QPainterPath()
+        s_path = QPainterPath()
 
         for stroke in result.paths:
-            target_path = h_path if stroke.is_hatch else v_path
+            if stroke.is_shape:
+                target_path = s_path
+            elif stroke.is_hatch:
+                target_path = h_path
+            else:
+                target_path = v_path
+
             if stroke.is_bezier and stroke.cubic_segments:
                 p1 = stroke.cubic_segments[0][0]
                 target_path.moveTo(p1[0], p1[1])
                 for _, c1, c2, p2 in stroke.cubic_segments:
                     target_path.cubicTo(c1[0], c1[1], c2[0], c2[1], p2[0], p2[1])
+                if stroke.svg_d.strip().endswith("Z") or (stroke.cubic_segments and stroke.cubic_segments[0][0] == stroke.cubic_segments[-1][-1]):
+                    target_path.closeSubpath()
             else:
                 pts = stroke.points
                 if len(pts) >= 2:
                     target_path.moveTo(pts[0][0], pts[0][1])
                     for pt in pts[1:]:
                         target_path.lineTo(pt[0], pt[1])
+                elif len(pts) == 1:
+                    md = stroke.shape_metadata
+                    if md.get("type") == "circle":
+                        r = float(md.get("r", 2.0))
+                        target_path.addEllipse(pts[0][0] - r, pts[0][1] - r, r * 2, r * 2)
+                    else:
+                        target_path.moveTo(pts[0][0] - 1, pts[0][1])
+                        target_path.lineTo(pts[0][0] + 1, pts[0][1])
 
         self.cached_vector_path = v_path
         self.cached_hatch_path = h_path
+        self.cached_shape_path = s_path
 
         # Update high-performance raster cache
         self._update_rendered_cache()
@@ -339,7 +359,17 @@ class CanvasView(QWidget):
             painter.setPen(hatch_pen)
             painter.drawPath(self.cached_hatch_path)
 
-        # 2. Render contours
+        # 2. Render shapes
+        if self.cached_shape_path and not self.cached_shape_path.isEmpty():
+            shape_pen = QPen(stroke_color)
+            shape_pen.setWidthF(max(0.7, 1.0 / math.sqrt(max(0.1, zoom))))
+            shape_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            shape_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(shape_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.cached_shape_path)
+
+        # 3. Render contours
         if self.cached_vector_path:
             vector_pen = QPen(stroke_color)
             vector_pen.setWidthF(max(0.8, 1.1 / math.sqrt(max(0.1, zoom))))
