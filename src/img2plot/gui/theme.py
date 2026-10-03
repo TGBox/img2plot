@@ -408,29 +408,41 @@ QRadioButton::indicator:checked {
 
 QTabWidget::pane {
     border: 1px solid #27272a;
-    background-color: #09090b;
+    background-color: #121214;
     border-radius: 6px;
+}
+
+QTabWidget#sidebarTabs::pane {
+    border: none;
+    border-top: 1px solid #27272a;
+    background-color: #121214;
 }
 
 QTabBar::tab {
     background-color: #18181b;
     color: #a1a1aa;
-    padding: 8px 16px;
+    padding: 7px 11px;
+    font-size: 11px;
+    font-weight: 600;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
+    border: 1px solid #27272a;
+    border-bottom: none;
     margin-right: 2px;
 }
 
 QTabBar::tab:selected {
-    background-color: #09090b;
+    background-color: #121214;
     color: #38bdf8;
     font-weight: bold;
-    border-bottom: 2px solid #38bdf8;
+    border: 1px solid #38bdf8;
+    border-bottom: 2px solid #121214;
 }
 
 QTabBar::tab:hover:!selected {
     background-color: #27272a;
     color: #f4f4f5;
+    border-color: #3f3f46;
 }
 
 QProgressBar {
@@ -446,6 +458,30 @@ QProgressBar {
 QProgressBar::chunk {
     background-color: #3b82f6;
     border-radius: 5px;
+}
+
+/* Sticky Footer at bottom of sidebar */
+QWidget#stickyFooter {
+    background-color: #161619;
+    border-top: 1px solid #27272a;
+}
+
+QProgressBar#stickyProgressBar {
+    background-color: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 4px;
+    height: 8px;
+    text-align: center;
+}
+
+QProgressBar#stickyProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #2563eb, stop:1 #38bdf8);
+    border-radius: 3px;
+}
+
+QWidget#sidebarHeader {
+    background-color: #121214;
 }
 
 QToolTip {

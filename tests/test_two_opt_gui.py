@@ -5,11 +5,6 @@ from img2plot.gui.sidebar import SidebarWidget
 from img2plot.core.parameters import PlotParameters
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 def test_two_opt_checkbox_hidden_and_disabled_by_default(app):
     sidebar = SidebarWidget()
     assert sidebar.chk_tsp.isChecked() is False

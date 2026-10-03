@@ -499,3 +499,8 @@ class MainWindow(QMainWindow):
             "<li>SVG- und PNG-Export mit Maßstabs- und Randoptionen</li>"
             "</ul>",
         )
+
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "worker") and self.worker.isRunning():
+            self.worker.stop()
+        super().closeEvent(event)

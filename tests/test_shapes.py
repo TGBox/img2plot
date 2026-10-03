@@ -101,7 +101,7 @@ def test_generate_shapes_diamonds_and_hearts():
         use_shapes=True,
         shape_type="diamonds",
         shape_placement="grid",
-        shape_density=0.5,
+        shape_density=1.0,
     )
     d_strokes = generate_shapes(gray, grad_x, grad_y, params_d)
     assert len(d_strokes) > 0
@@ -113,7 +113,7 @@ def test_generate_shapes_diamonds_and_hearts():
         use_shapes=True,
         shape_type="hearts",
         shape_placement="grid",
-        shape_density=0.5,
+        shape_density=1.0,
     )
     h_strokes = generate_shapes(gray, grad_x, grad_y, params_h)
     assert len(h_strokes) > 0

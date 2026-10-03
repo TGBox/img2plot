@@ -10,14 +10,6 @@ from PySide6.QtWidgets import QApplication
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
-
-
 def test_sidebar_parameter_sync(qapp):
     from img2plot.gui.sidebar import SidebarWidget
     from img2plot.core.parameters import PlotParameters

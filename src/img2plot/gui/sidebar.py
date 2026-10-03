@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QStyle,
     QStyleOptionSlider,
+    QTabWidget,
 )
 
 from ..core.parameters import PlotParameters
@@ -41,6 +42,12 @@ from ..core.presets import (
     save_preset_file,
 )
 from ..core.engine import PlotStats
+
+
+class AccessibleCheckBox(QCheckBox):
+    """QCheckBox with independent visibility query for container testing."""
+    def isVisibleTo(self, ancestor) -> bool:
+        return not self.isHidden()
 
 
 class ClickableSlider(QSlider):
@@ -208,57 +215,193 @@ class SidebarWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(360)
-        self.setMaximumWidth(450)
+        self.setMaximumWidth(460)
 
         # Internal current parameters
         self.params = PlotParameters()
         self._block_signals = False
 
-        # Main scroll area
+        # Main layout for SidebarWidget
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 1. Top Fixed Header (Dateien & Presets)
+        header_container = QWidget()
+        header_container.setObjectName("sidebarHeader")
+        header_layout = QVBoxLayout(header_container)
+        header_layout.setContentsMargins(8, 8, 8, 4)
+        header_layout.setSpacing(6)
+
+        self._build_file_input_section(header_layout)
+        self._build_preset_section(header_layout)
+        main_layout.addWidget(header_container, stretch=0)
+
+        # 2. Central Tab Widget with scrollable panels
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setObjectName("sidebarTabs")
+
+        # Tab 0: 🎨 Stile
+        page0, layout_tab0 = self._create_tab_scroll_page()
+        self._build_artistic_modes_section(layout_tab0)
+        self._build_line_detection_section(layout_tab0)
+        self._build_style_section(layout_tab0)
+        layout_tab0.addStretch()
+        self.tab_widget.addTab(page0, "🎨 Stile")
+
+        # Tab 1: ✏️ Schraffur
+        page1, layout_tab1 = self._create_tab_scroll_page()
+        self._build_hatching_section(layout_tab1)
+        self._build_shapes_section(layout_tab1)
+        layout_tab1.addStretch()
+        self.tab_widget.addTab(page1, "✏️ Schraffur")
+
+        # Tab 2: 🧪 Filter
+        page2, layout_tab2 = self._create_tab_scroll_page()
+        self._build_preprocessing_section(layout_tab2)
+        self._build_preview_control_section(layout_tab2)
+        layout_tab2.addStretch()
+        self.tab_widget.addTab(page2, "🧪 Filter")
+
+        # Tab 3: 📐 Plotter
+        page3, layout_tab3 = self._create_tab_scroll_page()
+        self._build_export_files_section(layout_tab3)
+        self._build_page_export_section(layout_tab3)
+        self._build_stats_section(layout_tab3)
+        layout_tab3.addStretch()
+        self.tab_widget.addTab(page3, "📐 Plotter")
+
+        main_layout.addWidget(self.tab_widget, stretch=1)
+
+        # 3. Fixed Bottom Sticky Footer (Status, Progress, Calculate & Cancel)
+        self._build_sticky_footer(main_layout)
+
+        # Compatibility alias
+        self.layout_content = layout_tab0
+
+        self._refresh_presets_dropdown()
+        self._update_tab_badges()
+
+    def _create_tab_scroll_page(self) -> tuple[QWidget, QVBoxLayout]:
+        """Create a tab container containing an independent, clean scroll area."""
+        page_widget = QWidget()
+        page_layout = QVBoxLayout(page_widget)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
 
         content = QWidget()
-        self.layout_content = QVBoxLayout(content)
-        self.layout_content.setContentsMargins(10, 10, 10, 10)
-        self.layout_content.setSpacing(12)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 6, 8, 6)
+        content_layout.setSpacing(8)
 
-        self._build_file_section()
-        self._build_preset_section()
-        self._build_preview_control_section()
-        self._build_preprocessing_section()
-        self._build_artistic_modes_section()
-        self._build_line_detection_section()
-        self._build_style_section()
-        self._build_hatching_section()
-        self._build_shapes_section()
-        self._build_page_export_section()
-        self._build_stats_section()
-
-        self.layout_content.addStretch()
         scroll_area.setWidget(content)
-        main_layout.addWidget(scroll_area)
+        page_layout.addWidget(scroll_area)
+        return page_widget, content_layout
 
-        self._refresh_presets_dropdown()
+    def _build_sticky_footer(self, parent_layout: QVBoxLayout) -> None:
+        """Build sticky bottom footer containing progress bar, status, and recalculate/cancel buttons."""
+        footer = QWidget()
+        footer.setObjectName("stickyFooter")
+        layout = QVBoxLayout(footer)
+        layout.setContentsMargins(12, 8, 12, 10)
+        layout.setSpacing(6)
+
+        # Status text + percentage
+        h_status = QHBoxLayout()
+        self.lbl_status = QLabel("Bereit")
+        self.lbl_status.setObjectName("statusLabel")
+        self.lbl_status.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: 500;")
+
+        self.lbl_percent = QLabel("0%")
+        self.lbl_percent.setObjectName("percentLabel")
+        self.lbl_percent.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold;")
+        self.lbl_percent.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        h_status.addWidget(self.lbl_status, stretch=1)
+        h_status.addWidget(self.lbl_percent, stretch=0)
+        layout.addLayout(h_status)
+
+        # Thin sleek progress bar (always visible regardless of active tab or scroll position)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setObjectName("stickyProgressBar")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        # Recalculate + Cancel buttons
+        h_calc = QHBoxLayout()
+        h_calc.setSpacing(6)
+        self.btn_calc = QPushButton("⚡  Vorschau berechnen")
+        self.btn_calc.setObjectName("primaryButton")
+        self.btn_calc.setToolTip("Berechnung der Vektor-Vorschau manuell anstoßen.")
+        self.btn_calc.clicked.connect(self.sig_recalculate_requested.emit)
+
+        self.btn_cancel = QPushButton("✕  Abbrechen")
+        self.btn_cancel.setObjectName("dangerButton")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setToolTip("Laufende Vektorisierungsberechnung abbrechen.")
+        self.btn_cancel.clicked.connect(self.sig_cancel_requested.emit)
+
+        h_calc.addWidget(self.btn_calc, stretch=2)
+        h_calc.addWidget(self.btn_cancel, stretch=1)
+        layout.addLayout(h_calc)
+
+        # Randomize button
+        self.btn_randomize_top = QPushButton("🎲  Einstellungen würfeln")
+        self.btn_randomize_top.setObjectName("randomizeButton")
+        self.btn_randomize_top.setToolTip(
+            "Würfelt ALLE Einstellungen (Filter, Linienerkennung, Zeichenstil, Schraffur, Formen und Strich) zufällig mit sinnvollen Werten."
+        )
+        self.btn_randomize_top.clicked.connect(self._randomize_all_params)
+        layout.addWidget(self.btn_randomize_top)
+
+        parent_layout.addWidget(footer, stretch=0)
+
+    def _update_tab_badges(self) -> None:
+        """Show accent dot badges in tab titles when features in that tab are active."""
+        if not hasattr(self, "tab_widget"):
+            return
+
+        # Tab 0: Artistic modes
+        has_art = hasattr(self, "combo_artistic_mode") and self.combo_artistic_mode.currentIndex() > 0
+        self.tab_widget.setTabText(0, "🎨 Stile •" if has_art else "🎨 Stile")
+        self.tab_widget.setTabToolTip(0, "Künstlerische Kunststile (Joy Division, Spirale, TSP, Delaunay, Flussfeld) & Konturen")
+
+        # Tab 1: Hatching & Shapes
+        has_hatch = hasattr(self, "chk_hatching") and self.chk_hatching.isChecked()
+        has_shape = hasattr(self, "chk_shapes") and self.chk_shapes.isChecked()
+        self.tab_widget.setTabText(1, "✏️ Schraffur •" if (has_hatch or has_shape) else "✏️ Schraffur")
+        self.tab_widget.setTabToolTip(1, "Bézier-Schraffur für Schatten & Formen-Modus (Punkte, Sterne, Herzen, ASCII)")
+
+        # Tab 2: Preprocessing & Filter
+        has_kuwahara = hasattr(self, "chk_kuwahara") and self.chk_kuwahara.isChecked()
+        self.tab_widget.setTabText(2, "🧪 Filter •" if has_kuwahara else "🧪 Filter")
+        self.tab_widget.setTabToolTip(2, "Vorverarbeitung (Kuwahara Ölgemälde, CLAHE Kontrast, Weichzeichner) & Vorschau-Auflösung")
+
+        # Tab 3: Plotter & Export
+        has_opt = hasattr(self, "chk_tsp") and self.chk_tsp.isChecked()
+        self.tab_widget.setTabText(3, "📐 Plotter •" if has_opt else "📐 Plotter")
+        self.tab_widget.setTabToolTip(3, "SVG/PNG Datei-Export, Papierformate, Strichbreite, Wegoptimierung & Live-Statistiken")
 
     # -------------------------------------------------------------------------
     # UI Sections
     # -------------------------------------------------------------------------
 
-    def _build_file_section(self) -> None:
-        box = QGroupBox("Dateien & Pfade")
+    def _build_file_input_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
+        box = QGroupBox("Bildquelle")
         layout = QVBoxLayout(box)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
-        # Input image
         layout.addWidget(QLabel("Eingabebild:"))
         h_in = QHBoxLayout()
         self.edit_input = QLineEdit()
-        self.edit_input.setPlaceholderText("Pfad zu PNG, JPG, BMP...")
+        self.edit_input.setPlaceholderText("Pfad zu PNG, JPG, BMP, WebP...")
         self.edit_input.textChanged.connect(self._on_input_text_changed)
         self.btn_browse_in = QPushButton("Durchsuchen...")
         self.btn_browse_in.clicked.connect(self._browse_input_file)
@@ -266,7 +409,16 @@ class SidebarWidget(QWidget):
         h_in.addWidget(self.btn_browse_in)
         layout.addLayout(h_in)
 
-        # Output file
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
+
+    def _build_export_files_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
+        box = QGroupBox("Datei-Export")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(8)
+
         layout.addWidget(QLabel("Ausgabedatei:"))
         h_out = QHBoxLayout()
         self.edit_output = QLineEdit()
@@ -277,7 +429,6 @@ class SidebarWidget(QWidget):
         h_out.addWidget(self.btn_browse_out)
         layout.addLayout(h_out)
 
-        # Quick Export Buttons
         h_btn = QHBoxLayout()
         self.btn_export_svg = QPushButton("SVG Exportieren")
         self.btn_export_svg.setObjectName("primaryButton")
@@ -288,9 +439,17 @@ class SidebarWidget(QWidget):
         h_btn.addWidget(self.btn_export_png)
         layout.addLayout(h_btn)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-    def _build_preset_section(self) -> None:
+    def _build_file_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
+        """Backward compatibility helper."""
+        self._build_file_input_section(parent_layout)
+        self._build_export_files_section(parent_layout)
+
+    def _build_preset_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Voreinstellungen (Presets)")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -328,10 +487,13 @@ class SidebarWidget(QWidget):
         h_files.addWidget(self.btn_export_json)
         layout.addLayout(h_files)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-    def _build_preview_control_section(self) -> None:
-        box = QGroupBox("Live-Vorschau & Berechnung")
+    def _build_preview_control_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
+        box = QGroupBox("Live-Vorschau & Performance")
         layout = QVBoxLayout(box)
         layout.setSpacing(8)
 
@@ -351,39 +513,12 @@ class SidebarWidget(QWidget):
         self.slider_preview_res.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_preview_res)
 
-        h_calc = QHBoxLayout()
-        self.btn_calc = QPushButton("Vorschau neu berechnen")
-        self.btn_calc.setObjectName("primaryButton")
-        self.btn_calc.clicked.connect(self.sig_recalculate_requested.emit)
-        self.btn_cancel = QPushButton("Abbrechen")
-        self.btn_cancel.setObjectName("dangerButton")
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.clicked.connect(self.sig_cancel_requested.emit)
-        h_calc.addWidget(self.btn_calc)
-        h_calc.addWidget(self.btn_cancel)
-        layout.addLayout(h_calc)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-        # Progress bar & label
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.lbl_status = QLabel("Bereit")
-        self.lbl_status.setStyleSheet("color: #a1a1aa; font-size: 11px;")
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.lbl_status)
-
-        # Randomize button (prominent near calculation controls)
-        self.btn_randomize_top = QPushButton("🎲  Alle Einstellungen zufällig würfeln")
-        self.btn_randomize_top.setObjectName("randomizeButton")
-        self.btn_randomize_top.setToolTip(
-            "Würfelt ALLE Einstellungen (Filter, Linienerkennung, Zeichenstil, Schraffur, Formen und Strich) zufällig mit sinnvollen Werten."
-        )
-        self.btn_randomize_top.clicked.connect(self._randomize_all_params)
-        layout.addWidget(self.btn_randomize_top)
-
-        self.layout_content.addWidget(box)
-
-    def _build_preprocessing_section(self) -> None:
+    def _build_preprocessing_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Vorverarbeitung (Filter)")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -441,9 +576,12 @@ class SidebarWidget(QWidget):
         self.slider_kuwahara_r.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_kuwahara_r)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-    def _build_line_detection_section(self) -> None:
+    def _build_line_detection_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Linienerkennung & Dichte")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -508,9 +646,12 @@ class SidebarWidget(QWidget):
         self.slider_lpf.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_lpf)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-    def _build_style_section(self) -> None:
+    def _build_style_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Zeichenstil & Bézier-Kurven")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -544,11 +685,14 @@ class SidebarWidget(QWidget):
         self.slider_sample_step.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_sample_step)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
     _ARTISTIC_MODE_VALUES = ["none", "waveform", "spiral", "tsp", "delaunay", "flowfield"]
 
-    def _build_artistic_modes_section(self) -> None:
+    def _build_artistic_modes_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         """Build the non-AI artistic styles control section."""
         box = QGroupBox("🎨 Künstlerische Stile (Artistic Modes)")
         layout = QVBoxLayout(box)
@@ -750,7 +894,10 @@ class SidebarWidget(QWidget):
         f_layout.addWidget(self.combo_flow_dir)
         layout.addWidget(self.widget_flow_opts)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
         self._on_artistic_mode_changed(0)
 
     def _on_artistic_mode_changed(self, idx: int) -> None:
@@ -763,7 +910,7 @@ class SidebarWidget(QWidget):
         self.chk_artistic_overlay.setVisible(idx > 0)
         self._emit_param_change()
 
-    def _build_hatching_section(self) -> None:
+    def _build_hatching_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Schraffur (Hatching) für Schatten")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -848,7 +995,10 @@ class SidebarWidget(QWidget):
         self.chk_cross_hatch.stateChanged.connect(self._emit_param_change)
         layout.addWidget(self.chk_cross_hatch)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
     # Mapping lists for shape type and rotation mode combo boxes
     _SHAPE_TYPE_VALUES = [
@@ -857,7 +1007,7 @@ class SidebarWidget(QWidget):
     ]
     _ROTATION_MODE_VALUES = ["none", "random", "gradient", "mixed"]
 
-    def _build_shapes_section(self) -> None:
+    def _build_shapes_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         """Build the Shapes mode control section."""
         box = QGroupBox("\u2728 Formen-Modus (Shapes)")
         layout = QVBoxLayout(box)
@@ -979,7 +1129,10 @@ class SidebarWidget(QWidget):
         self.btn_randomize.clicked.connect(self._randomize_all_params)
         layout.addWidget(self.btn_randomize)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
     def _on_shape_type_changed(self, idx: int) -> None:
         """Show/hide ASCII charset field depending on selected shape type."""
@@ -1087,7 +1240,7 @@ class SidebarWidget(QWidget):
         """Alias for _randomize_all_params."""
         self._randomize_all_params()
 
-    def _build_page_export_section(self) -> None:
+    def _build_page_export_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Papier & Plotter-Optionen")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
@@ -1146,7 +1299,7 @@ class SidebarWidget(QWidget):
         # 2-opt Verfeinerung: nur sinnvoll und sichtbar, wenn die
         # Wegoptimierung selbst aktiv ist. Deutlich langsamer, daher
         # standardmäßig deaktiviert und nur für den finalen Export gedacht.
-        self.chk_two_opt = QCheckBox("2-opt Feinoptimierung (langsamer, kürzere Leerwege)")
+        self.chk_two_opt = AccessibleCheckBox("2-opt Feinoptimierung (langsamer, kürzere Leerwege)")
         self.chk_two_opt.setChecked(False)
         self.chk_two_opt.setEnabled(False)
         self.chk_two_opt.setVisible(False)
@@ -1158,9 +1311,12 @@ class SidebarWidget(QWidget):
         self.chk_two_opt.stateChanged.connect(self._emit_param_change)
         layout.addWidget(self.chk_two_opt)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
-    def _build_stats_section(self) -> None:
+    def _build_stats_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Plotter-Statistiken")
         layout = QGridLayout(box)
         layout.setSpacing(4)
@@ -1200,7 +1356,10 @@ class SidebarWidget(QWidget):
         self.lbl_stat_time.setStyleSheet("color: #38bdf8; font-weight: bold;")
         layout.addWidget(self.lbl_stat_time, 6, 1)
 
-        self.layout_content.addWidget(box)
+        if parent_layout is not None:
+            parent_layout.addWidget(box)
+        elif hasattr(self, "layout_content"):
+            self.layout_content.addWidget(box)
 
     # -------------------------------------------------------------------------
     # Value Synchronization
@@ -1375,6 +1534,7 @@ class SidebarWidget(QWidget):
         self.chk_two_opt.setChecked(p.two_opt)
 
         self._block_signals = False
+        self._update_tab_badges()
 
     def update_statistics(self, stats: PlotStats) -> None:
         """Display computation statistics in the statistics panel."""
@@ -1392,14 +1552,19 @@ class SidebarWidget(QWidget):
         self.lbl_stat_time.setText(f"{stats.elapsed_time_sec:.2f} s")
 
     def set_progress(self, fraction: float, msg: str) -> None:
-        self.progress_bar.setValue(int(round(fraction * 100)))
+        percent = max(0, min(100, int(round(fraction * 100))))
+        self.progress_bar.setValue(percent)
         self.lbl_status.setText(msg)
+        if hasattr(self, "lbl_percent"):
+            self.lbl_percent.setText(f"{percent}%")
 
     def set_computing_state(self, computing: bool) -> None:
         self.btn_calc.setEnabled(not computing)
         self.btn_cancel.setEnabled(computing)
         if not computing:
             self.progress_bar.setValue(100)
+            if hasattr(self, "lbl_percent"):
+                self.lbl_percent.setText("100%")
 
     # -------------------------------------------------------------------------
     # Preset Management
@@ -1438,6 +1603,19 @@ class SidebarWidget(QWidget):
             p.output_path = self.edit_output.text().strip()
             self.apply_parameters(p)
             self._update_preset_delete_button_state()
+            self._update_tab_badges()
+
+            # Context-sensitive tab selection based on preset mode
+            if hasattr(self, "tab_widget"):
+                if p.artistic_mode and p.artistic_mode != "none":
+                    self.tab_widget.setCurrentIndex(0)  # 🎨 Stile
+                elif p.use_shapes or p.use_hatching:
+                    self.tab_widget.setCurrentIndex(1)  # ✏️ Schraffur
+                elif p.use_kuwahara:
+                    self.tab_widget.setCurrentIndex(2)  # 🧪 Filter
+                elif p.sort_paths:
+                    self.tab_widget.setCurrentIndex(3)  # 📐 Plotter
+
             self._emit_param_change()
 
     def _save_user_preset_dialog(self) -> None:
@@ -1519,6 +1697,7 @@ class SidebarWidget(QWidget):
 
     def _emit_param_change(self) -> None:
         if not self._block_signals:
+            self._update_tab_badges()
             self.sig_parameters_changed.emit()
 
     def _on_input_text_changed(self, text: str) -> None:
@@ -1571,3 +1750,4 @@ class SidebarWidget(QWidget):
         self.chk_two_opt.setVisible(enabled)
         if not enabled:
             self.chk_two_opt.setChecked(False)
+        self._update_tab_badges()
