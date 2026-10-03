@@ -1,8 +1,8 @@
 """
 Archimedean Spiral Art generation module for img2plot.
-Generates a single continuous spiral winding from center to corners,
-with high-frequency sinusoidal amplitude modulation based on image darkness.
-Produces 100% single-stroke continuous plotter art with zero pen lifts.
+Generates a continuous spiral winding from center to edges,
+with metric arc-length sinusoidal amplitude modulation based on image darkness and edges.
+Produces single-stroke continuous plotter art with zero cross-canvas artifacts.
 """
 
 from __future__ import annotations
@@ -18,21 +18,21 @@ Point2D = Tuple[float, float]
 
 def generate_spiral(
     gray_image: np.ndarray,
-    num_loops: int = 60,
-    resolution: int = 350,
-    amplitude: float = 4.0,
+    num_loops: int = 70,
+    resolution: int = 400,
+    amplitude: float = 6.0,
     frequency: float = 30.0,
     is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> List[StrokePath]:
     """
-    Generate an Archimedean spiral modulated by image darkness.
+    Generate an Archimedean spiral modulated by image darkness and edges.
 
     Args:
         gray_image: 2D float array in [0.0, 1.0], shape (H, W).
         num_loops: Total number of 360-degree spiral revolutions.
         resolution: Points sampled per single revolution.
         amplitude: Max oscillation amplitude in dark areas (pixels).
-        frequency: Modulation cycles per radian or revolution.
+        frequency: Oscillation frequency parameter (higher = tighter wave frequency).
         is_cancelled: Optional cancellation callback.
 
     Returns:
@@ -44,19 +44,42 @@ def generate_spiral(
     if h < 2 or w < 2 or num_loops < 1 or resolution < 4:
         return []
 
+    darkness = np.clip(1.0 - gray_image, 0.0, 1.0)
+
+    # Edge gradient to sharpen fine contours (eyes, beaks, silhouettes)
+    gy, gx = np.gradient(gray_image)
+    grad_mag = np.hypot(gx, gy)
+    g_max = float(grad_mag.max())
+    if g_max > 0:
+        grad_mag /= g_max
+
+    # Combined feature response: strong shadows + sharp edges
+    feature_map = 0.75 * np.power(darkness, 1.4) + 0.25 * np.power(grad_mag, 1.2)
+    feature_map = np.clip(feature_map, 0.0, 1.0)
+    # Highlights remain clean and smooth
+    feature_map[feature_map < 0.06] = 0.0
+
     cx = w / 2.0
     cy = h / 2.0
-    # Spiral covers the canvas out to the corners
-    max_radius = math.hypot(cx, cy) * 0.98
+
+    # Scale spiral to cover corners of the canvas
+    corner_scale = math.hypot(cx, cy) / max(cx, cy)
+    rx_max = cx * corner_scale
+    ry_max = cy * corner_scale
+    pitch = min(cx, cy) / float(num_loops)
 
     total_steps = int(num_loops * resolution)
     theta_max = 2.0 * math.pi * num_loops
 
-    darkness = 1.0 - gray_image
+    # Metric wavelength: constant spatial distance per wave cycle
+    # frequency 30 -> ~4.0px wavelength; frequency 15 -> ~8.0px wavelength
+    wavelength = max(2.5, 120.0 / max(1.0, frequency))
+    max_amp = min(amplitude, pitch * 0.92)
 
     points: List[Point2D] = []
+    s = 0.0
+    prev_bx, prev_by = cx, cy
 
-    # Yield GIL occasionally
     yield_step = max(500, total_steps // 20)
 
     for i in range(total_steps):
@@ -64,39 +87,53 @@ def generate_spiral(
             return []
 
         theta = (i / float(total_steps)) * theta_max
-        # Base Archimedean radius
-        r_base = (theta / theta_max) * max_radius
+        frac = theta / theta_max
 
-        # Base coordinate on smooth spiral
+        # Elliptical radius along aspect ratio
+        rx = frac * rx_max
+        ry = frac * ry_max
+
         cos_t = math.cos(theta)
         sin_t = math.sin(theta)
-        base_x = cx + r_base * cos_t
-        base_y = cy + r_base * sin_t
 
-        # If base point is inside image, sample darkness
-        ix = int(round(base_x))
-        iy = int(round(base_y))
+        bx = cx + rx * cos_t
+        by = cy + ry * sin_t
 
+        ds = math.hypot(bx - prev_bx, by - prev_by)
+        s += ds
+        prev_bx, prev_by = bx, by
+
+        # Sample feature map
+        ix = int(round(bx))
+        iy = int(round(by))
         if 0 <= ix < w and 0 <= iy < h:
-            d = float(darkness[iy, ix])
+            d = float(feature_map[iy, ix])
         else:
             d = 0.0
 
-        # Oscillation wave perpendicular to spiral arm
-        wave = math.sin(theta * frequency)
-        disp = d * amplitude * wave
+        # Normal vector to elliptical spiral arm
+        tx = -rx * sin_t
+        ty = ry * cos_t
+        t_len = math.hypot(tx, ty)
+        if t_len > 1e-6:
+            nx = -ty / t_len
+            ny = tx / t_len
+        else:
+            nx, ny = 0.0, 1.0
 
-        # Normal vector perpendicular to radial direction is (-sin_t, cos_t)
-        px = base_x - disp * sin_t
-        py = base_y + disp * cos_t
+        wave = math.sin(2.0 * math.pi * s / wavelength)
+        disp = d * max_amp * wave
 
-        # Only include points inside canvas with slight boundary margin
-        if -10 <= px <= w + 10 and -10 <= py <= h + 10:
-            points.append((float(px), float(py)))
+        px = bx + disp * nx
+        py = by + disp * ny
+
+        # Clamp cleanly to canvas boundaries
+        px = max(0.0, min(float(w - 1), px))
+        py = max(0.0, min(float(h - 1), py))
+        points.append((px, py))
 
     if len(points) < 2:
         return []
 
-    # Construct single continuous SVG path
     svg_d = "M " + " L ".join(f"{p[0]:.2f},{p[1]:.2f}" for p in points)
     return [StrokePath(points=points, svg_d=svg_d)]

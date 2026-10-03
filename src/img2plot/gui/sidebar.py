@@ -619,8 +619,8 @@ class SidebarWidget(QWidget):
         self.slider_spiral_loops = SliderRow(
             title="Spiral-Windungen (Umdrehungen):",
             min_val=20,
-            max_val=120,
-            default_val=60,
+            max_val=150,
+            default_val=75,
             step=5,
             tooltip="Gesamtzahl der Spiralwindungen von innen nach außen.",
         )
@@ -630,8 +630,8 @@ class SidebarWidget(QWidget):
         self.slider_spiral_amp = SliderRow(
             title="Schwingungs-Amplitude:",
             min_val=1.0,
-            max_val=12.0,
-            default_val=4.0,
+            max_val=25.0,
+            default_val=6.0,
             step=0.5,
             decimals=1,
             suffix="px",
@@ -662,8 +662,8 @@ class SidebarWidget(QWidget):
         self.slider_tsp_points = SliderRow(
             title="Punktanzahl (Dichte):",
             min_val=300,
-            max_val=2500,
-            default_val=1200,
+            max_val=4000,
+            default_val=2400,
             step=50,
             tooltip="Anzahl der Stipple-Punkte, die zu einer einzigen Linie verbunden werden.",
         )
@@ -691,8 +691,8 @@ class SidebarWidget(QWidget):
         self.slider_delaunay_points = SliderRow(
             title="Polygonanzahl / Knoten:",
             min_val=200,
-            max_val=2000,
-            default_val=800,
+            max_val=3000,
+            default_val=1400,
             step=50,
             tooltip="Anzahl der Dreiecksknoten für das Low-Poly-Mosaik.",
         )
@@ -703,7 +703,7 @@ class SidebarWidget(QWidget):
             title="Kanten- vs. Schattenfokus:",
             min_val=0.0,
             max_val=1.0,
-            default_val=0.6,
+            default_val=0.65,
             step=0.05,
             decimals=2,
             tooltip="0.0 = Punkte nach Helligkeit, 1.0 = Punkte dicht an Objektkanten.",
@@ -721,8 +721,8 @@ class SidebarWidget(QWidget):
         self.slider_flow_lines = SliderRow(
             title="Linienanzahl (Streamlines):",
             min_val=200,
-            max_val=1600,
-            default_val=800,
+            max_val=2500,
+            default_val=1000,
             step=50,
             tooltip="Anzahl der virtuellen Pinselstriche.",
         )
@@ -732,8 +732,8 @@ class SidebarWidget(QWidget):
         self.slider_flow_steps = SliderRow(
             title="Maximale Strichlänge:",
             min_val=10,
-            max_val=80,
-            default_val=40,
+            max_val=100,
+            default_val=50,
             step=5,
             tooltip="Maximale Schrittweite je Flusslinie.",
         )

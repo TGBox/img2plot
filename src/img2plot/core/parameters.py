@@ -76,23 +76,23 @@ class PlotParameters:
     waveform_occlusion: bool = True
 
     # Spiral Art Parameters
-    spiral_loops: int = 60
-    spiral_resolution: int = 350
-    spiral_amplitude: float = 4.0
+    spiral_loops: int = 75
+    spiral_resolution: int = 400
+    spiral_amplitude: float = 6.0
     spiral_frequency: float = 30.0
 
     # TSP Single-Line Art Parameters
-    tsp_points: int = 1200
+    tsp_points: int = 2400
     tsp_2opt_passes: int = 15
 
     # Delaunay / Low-Poly Art Parameters
-    delaunay_points: int = 800
-    delaunay_edge_weight: float = 0.6
+    delaunay_points: int = 1400
+    delaunay_edge_weight: float = 0.65
 
     # Flow Field / Streamlines Parameters
-    flowfield_lines: int = 800
-    flowfield_step_len: float = 3.0
-    flowfield_max_steps: int = 40
+    flowfield_lines: int = 1000
+    flowfield_step_len: float = 2.5
+    flowfield_max_steps: int = 50
     flowfield_direction: str = "tangent"  # "tangent" (contour flow) or "gradient"
 
     # Export & physical page setup

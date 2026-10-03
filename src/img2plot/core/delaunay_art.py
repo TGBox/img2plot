@@ -1,7 +1,8 @@
 """
 Delaunay / Low-Poly Art generation module for img2plot.
-Generates geometric wireframe artwork by sampling feature points along edges
-and dark regions, performing Delaunay Triangulation, and extracting polygon edges.
+Generates geometric wireframe artwork by placing feature-aware vertices
+along image contours, edges, and shadow forms, performing Delaunay Triangulation,
+and culling background edges to tightly sculpt the subject's 3D silhouette.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ Point2D = Tuple[float, float]
 def generate_delaunay_art(
     gray_image: np.ndarray,
     grad_magnitude: Optional[np.ndarray] = None,
-    num_points: int = 800,
+    num_points: int = 1200,
     edge_weight: float = 0.6,
     is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> List[StrokePath]:
@@ -55,58 +56,56 @@ def generate_delaunay_art(
     if g_max > 0:
         grad_mag /= g_max
 
-    # Combined feature importance map
-    weight_map = (1.0 - edge_weight) * darkness + edge_weight * grad_mag
+    # Combined feature importance map: edges and shadows
+    weight_map = (1.0 - edge_weight) * np.power(darkness, 1.4) + edge_weight * np.power(grad_mag, 1.2)
+    
+    # Check if image has identifiable content
     w_sum = float(np.sum(weight_map))
     if w_sum <= 1e-4:
         weight_map = np.ones_like(weight_map)
+        w_sum = float(np.sum(weight_map))
 
-    # 1. Sample perimeter border points to anchor the boundary
-    border_pts: List[Point2D] = []
-    # Corners
-    border_pts.extend([(0.0, 0.0), (float(w - 1), 0.0), (float(w - 1), float(h - 1)), (0.0, float(h - 1))])
+    # Mask out flat, low-contrast background unless entire image is uniform
+    has_contrast = bool(np.max(weight_map) > 0.15)
+    if has_contrast:
+        weight_map[weight_map < 0.06] = 0.0
+        w_sum = float(np.sum(weight_map))
+        if w_sum <= 1e-4:
+            weight_map = np.clip(1.0 - gray_image, 0.01, 1.0)
+            w_sum = float(np.sum(weight_map))
 
-    # Equispaced border points
-    num_border = max(4, int(math.sqrt(num_points)))
-    for bx in np.linspace(0, w - 1, num_border):
-        border_pts.append((float(bx), 0.0))
-        border_pts.append((float(bx), float(h - 1)))
-    for by in np.linspace(0, h - 1, num_border):
-        border_pts.append((0.0, float(by)))
-        border_pts.append((float(w - 1), float(by)))
-
-    # 2. Sample interior feature points based on weight map
+    # Importance sampling of vertices
     rng = random.Random(1337)
-    interior_pts: List[Point2D] = []
-    attempts = 0
-    max_attempts = num_points * 30
+    flat_weights = weight_map.flatten()
+    prob = flat_weights / w_sum
+    non_zero = int(np.count_nonzero(prob > 0))
+    sample_size = min(num_points, non_zero)
+    if sample_size < 4:
+        return []
 
-    while len(interior_pts) < num_points and attempts < max_attempts:
-        if attempts % 1000 == 0 and is_cancelled and is_cancelled():
-            return []
+    sampled_indices = np.random.RandomState(1337).choice(
+        len(prob), size=sample_size, replace=False, p=prob
+    )
 
-        attempts += 1
-        rx = rng.uniform(2.0, w - 3.0)
-        ry = rng.uniform(2.0, h - 3.0)
-        ix = int(rx)
-        iy = int(ry)
+    vertices: List[Point2D] = []
+    for idx in sampled_indices:
+        y = idx // w
+        x = idx % w
+        jx = float(x) + rng.uniform(-0.3, 0.3)
+        jy = float(y) + rng.uniform(-0.3, 0.3)
+        vertices.append((max(0.0, min(float(w - 1), jx)), max(0.0, min(float(h - 1), jy))))
 
-        val = float(weight_map[iy, ix])
-        if rng.random() < val:
-            interior_pts.append((rx, ry))
-
-    all_pts = np.array(border_pts + interior_pts, dtype=np.float32)
-
+    all_pts = np.array(vertices, dtype=np.float32)
     if len(all_pts) < 4:
         return []
 
     if is_cancelled and is_cancelled():
         return []
 
-    # 3. Compute Delaunay Triangulation
+    # Compute Delaunay Triangulation
     tri = Delaunay(all_pts)
 
-    # 4. Extract unique edges
+    # Extract unique undirected edges
     edges: Set[Tuple[int, int]] = set()
     for simplex in tri.simplices:
         for i in range(3):
@@ -115,11 +114,53 @@ def generate_delaunay_art(
                 u, v = v, u
             edges.add((u, v))
 
+    max_span = max(w, h) * 0.25
     paths: List[StrokePath] = []
+
     for u, v in edges:
-        p1 = (float(all_pts[u, 0]), float(all_pts[u, 1]))
-        p2 = (float(all_pts[v, 0]), float(all_pts[v, 1]))
-        svg_d = f"M {p1[0]:.2f},{p1[1]:.2f} L {p2[0]:.2f},{p2[1]:.2f}"
-        paths.append(StrokePath(points=[p1, p2], svg_d=svg_d))
+        p1 = all_pts[u]
+        p2 = all_pts[v]
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        dist = math.hypot(dx, dy)
+
+        # Cull excessive long-distance bridge spans across empty regions
+        if dist > max_span:
+            continue
+
+        # If contrast exists, check if this edge spans purely empty white background
+        if has_contrast:
+            num_samples = 5
+            ts = np.linspace(0.1, 0.9, num_samples)
+            xs = np.clip(np.round(p1[0] + ts * dx).astype(int), 0, w - 1)
+            ys = np.clip(np.round(p1[1] + ts * dy).astype(int), 0, h - 1)
+
+            sample_dark = darkness[ys, xs]
+            sample_grad = grad_mag[ys, xs]
+
+            mid_idx = num_samples // 2
+            if (sample_dark[mid_idx] < 0.05 and sample_grad[mid_idx] < 0.05) and (
+                np.mean(sample_dark) < 0.07 and np.mean(sample_grad) < 0.07
+            ):
+                continue
+
+            if np.max(sample_dark) < 0.06 and np.max(sample_grad) < 0.06:
+                continue
+
+        pt1 = (float(p1[0]), float(p1[1]))
+        pt2 = (float(p2[0]), float(p2[1]))
+        svg_d = f"M {pt1[0]:.2f},{pt1[1]:.2f} L {pt2[0]:.2f},{pt2[1]:.2f}"
+        paths.append(StrokePath(points=[pt1, pt2], svg_d=svg_d))
+
+    # If edge culling was too aggressive, fallback to original edges
+    if len(paths) < 10:
+        paths.clear()
+        for u, v in edges:
+            p1 = all_pts[u]
+            p2 = all_pts[v]
+            pt1 = (float(p1[0]), float(p1[1]))
+            pt2 = (float(p2[0]), float(p2[1]))
+            svg_d = f"M {pt1[0]:.2f},{pt1[1]:.2f} L {pt2[0]:.2f},{pt2[1]:.2f}"
+            paths.append(StrokePath(points=[pt1, pt2], svg_d=svg_d))
 
     return paths

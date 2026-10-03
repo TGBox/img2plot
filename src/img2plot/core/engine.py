@@ -444,7 +444,14 @@ class PlotEngine:
         if isinstance(image_input, str):
             img_pil = Image.open(image_input)
         elif isinstance(image_input, np.ndarray):
-            img_pil = Image.fromarray(image_input)
+            if image_input.dtype in (np.float32, np.float64):
+                if image_input.max() <= 1.0:
+                    arr_u8 = np.clip(image_input * 255.0, 0, 255).astype(np.uint8)
+                else:
+                    arr_u8 = np.clip(image_input, 0, 255).astype(np.uint8)
+                img_pil = Image.fromarray(arr_u8)
+            else:
+                img_pil = Image.fromarray(image_input)
         elif isinstance(image_input, Image.Image):
             img_pil = image_input
         else:
