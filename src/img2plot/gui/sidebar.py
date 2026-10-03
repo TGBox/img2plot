@@ -202,6 +202,97 @@ class SliderRow(QWidget):
         self._update_label(val)
 
 
+class AccordionSection(QWidget):
+    """
+    Collapsible section with an accessible header button, chevron toggle indicator (▾/▸),
+    section title, and dynamic status badge.
+    """
+
+    sig_toggled = Signal(bool)
+
+    def __init__(self, title: str, parent=None, expanded: bool = True):
+        super().__init__(parent)
+        self._title = title
+        self._expanded = expanded
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 4)
+        layout.setSpacing(0)
+
+        # Header Button
+        self.header_btn = QPushButton()
+        self.header_btn.setObjectName("accordionHeader")
+        self.header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_btn.clicked.connect(self.toggle)
+
+        header_layout = QHBoxLayout(self.header_btn)
+        header_layout.setContentsMargins(10, 7, 10, 7)
+        header_layout.setSpacing(8)
+
+        # Chevron arrow label
+        self.lbl_chevron = QLabel("▾" if expanded else "▸")
+        self.lbl_chevron.setObjectName("accordionChevron")
+        self.lbl_chevron.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 13px;")
+        header_layout.addWidget(self.lbl_chevron)
+
+        # Title label
+        self.lbl_title = QLabel(title)
+        self.lbl_title.setObjectName("accordionTitle")
+        self.lbl_title.setStyleSheet("color: #f4f4f5; font-weight: 600; font-size: 12px;")
+        header_layout.addWidget(self.lbl_title)
+
+        header_layout.addStretch()
+
+        # Status badge label
+        self.lbl_badge = QLabel("")
+        self.lbl_badge.setObjectName("accordionBadge")
+        header_layout.addWidget(self.lbl_badge)
+
+        layout.addWidget(self.header_btn)
+
+        # Content container
+        self.content_widget = QWidget()
+        self.content_widget.setObjectName("accordionContent")
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(6, 6, 6, 8)
+        self.content_layout.setSpacing(6)
+        layout.addWidget(self.content_widget)
+
+        self.set_expanded(expanded)
+
+    def toggle(self) -> None:
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self.content_widget.setVisible(expanded)
+        self.lbl_chevron.setText("▾" if expanded else "▸")
+        self.header_btn.setProperty("expanded", "true" if expanded else "false")
+        self.header_btn.style().unpolish(self.header_btn)
+        self.header_btn.style().polish(self.header_btn)
+        self.sig_toggled.emit(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_badge(self, text: str, active: bool = False) -> None:
+        if not text:
+            self.lbl_badge.setVisible(False)
+            return
+        self.lbl_badge.setText(text)
+        self.lbl_badge.setVisible(True)
+        if active:
+            self.lbl_badge.setStyleSheet(
+                "color: #38bdf8; font-weight: 600; font-size: 11px; padding: 2px 7px; "
+                "border-radius: 4px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35);"
+            )
+        else:
+            self.lbl_badge.setStyleSheet(
+                "color: #71717a; font-size: 11px; padding: 2px 6px; "
+                "border-radius: 4px; background: #27272a; border: 1px solid #3f3f46;"
+            )
+
+
 class SidebarWidget(QWidget):
     """Sidebar containing all input sliders, buttons, file explorers, presets, and stats."""
 
@@ -219,14 +310,14 @@ class SidebarWidget(QWidget):
 
         # Internal current parameters
         self.params = PlotParameters()
-        self._block_signals = False
+        self._block_signals = True
 
         # Main layout for SidebarWidget
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Top Fixed Header (Dateien & Presets)
+        # 1. Top Fixed Header (Dateien & Presets & Toolbar)
         header_container = QWidget()
         header_container.setObjectName("sidebarHeader")
         header_layout = QVBoxLayout(header_container)
@@ -235,73 +326,95 @@ class SidebarWidget(QWidget):
 
         self._build_file_input_section(header_layout)
         self._build_preset_section(header_layout)
+        self._build_sections_toolbar(header_layout)
         main_layout.addWidget(header_container, stretch=0)
 
-        # 2. Central Tab Widget with scrollable panels
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setObjectName("sidebarTabs")
+        # 2. Central Scroll Area with unified 4 Accordions
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("sidebarScrollArea")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
 
-        # Tab 0: 🎨 Stile
-        page0, layout_tab0 = self._create_tab_scroll_page()
-        self._build_artistic_modes_section(layout_tab0)
-        self._build_line_detection_section(layout_tab0)
-        self._build_style_section(layout_tab0)
-        layout_tab0.addStretch()
-        self.tab_widget.addTab(page0, "🎨 Stile")
+        scroll_content = QWidget()
+        scroll_content.setObjectName("sidebarContent")
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(8, 6, 8, 6)
+        scroll_layout.setSpacing(8)
 
-        # Tab 1: ✏️ Schraffur
-        page1, layout_tab1 = self._create_tab_scroll_page()
-        self._build_hatching_section(layout_tab1)
-        self._build_shapes_section(layout_tab1)
-        layout_tab1.addStretch()
-        self.tab_widget.addTab(page1, "✏️ Schraffur")
+        # Accordion 1: 🧪 Bild-Filter & Vorschau (eingeklappt standardmäßig)
+        self.acc_filter = AccordionSection("🧪 Bild-Filter & Vorschau", expanded=False)
+        self._build_preprocessing_section(self.acc_filter.content_layout)
+        self._build_preview_control_section(self.acc_filter.content_layout)
+        scroll_layout.addWidget(self.acc_filter)
 
-        # Tab 2: 🧪 Filter
-        page2, layout_tab2 = self._create_tab_scroll_page()
-        self._build_preprocessing_section(layout_tab2)
-        self._build_preview_control_section(layout_tab2)
-        layout_tab2.addStretch()
-        self.tab_widget.addTab(page2, "🧪 Filter")
+        # Accordion 2: 🎨 Künstlerische Stile (ausgeklappt standardmäßig)
+        self.acc_artistic = AccordionSection("🎨 Künstlerische Stile", expanded=True)
+        self._build_artistic_modes_section(self.acc_artistic.content_layout)
+        scroll_layout.addWidget(self.acc_artistic)
 
-        # Tab 3: 📐 Plotter
-        page3, layout_tab3 = self._create_tab_scroll_page()
-        self._build_export_files_section(layout_tab3)
-        self._build_page_export_section(layout_tab3)
-        self._build_stats_section(layout_tab3)
-        layout_tab3.addStretch()
-        self.tab_widget.addTab(page3, "📐 Plotter")
+        # Accordion 3: ✏️ Konturen & Schraffur (ausgeklappt standardmäßig)
+        self.acc_contours = AccordionSection("✏️ Konturen & Schraffur", expanded=True)
+        self._build_line_detection_section(self.acc_contours.content_layout)
+        self._build_style_section(self.acc_contours.content_layout)
+        self._build_hatching_section(self.acc_contours.content_layout)
+        self._build_shapes_section(self.acc_contours.content_layout)
+        scroll_layout.addWidget(self.acc_contours)
 
-        main_layout.addWidget(self.tab_widget, stretch=1)
+        # Accordion 4: 📐 Plotter, Export & Statistiken (eingeklappt standardmäßig)
+        self.acc_plotter = AccordionSection("📐 Plotter, Export & Statistiken", expanded=False)
+        self._build_export_files_section(self.acc_plotter.content_layout)
+        self._build_page_export_section(self.acc_plotter.content_layout)
+        self._build_stats_section(self.acc_plotter.content_layout)
+        scroll_layout.addWidget(self.acc_plotter)
+
+        scroll_layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area, stretch=1)
 
         # 3. Fixed Bottom Sticky Footer (Status, Progress, Calculate & Cancel)
         self._build_sticky_footer(main_layout)
 
         # Compatibility alias
-        self.layout_content = layout_tab0
+        self.layout_content = scroll_layout
 
         self._refresh_presets_dropdown()
-        self._update_tab_badges()
+        self._block_signals = False
+        self._update_accordion_badges()
 
-    def _create_tab_scroll_page(self) -> tuple[QWidget, QVBoxLayout]:
-        """Create a tab container containing an independent, clean scroll area."""
-        page_widget = QWidget()
-        page_layout = QVBoxLayout(page_widget)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        page_layout.setSpacing(0)
+    def _build_sections_toolbar(self, parent_layout: QVBoxLayout) -> None:
+        """Toolbar with quick Expand All / Collapse All buttons."""
+        toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(4, 2, 4, 2)
+        toolbar_layout.setSpacing(6)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        lbl = QLabel("Abschnitte:")
+        lbl.setStyleSheet("color: #71717a; font-size: 11px; font-weight: 500;")
+        toolbar_layout.addWidget(lbl)
+        toolbar_layout.addStretch()
 
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(8, 6, 8, 6)
-        content_layout.setSpacing(8)
+        self.btn_expand_all = QPushButton("▾ Alle öffnen")
+        self.btn_expand_all.setObjectName("toolbarSmallBtn")
+        self.btn_expand_all.setToolTip("Alle 4 Einstellungs-Abschnitte aufklappen.")
+        self.btn_expand_all.clicked.connect(self._expand_all_sections)
+        toolbar_layout.addWidget(self.btn_expand_all)
 
-        scroll_area.setWidget(content)
-        page_layout.addWidget(scroll_area)
-        return page_widget, content_layout
+        self.btn_collapse_all = QPushButton("▸ Alle schließen")
+        self.btn_collapse_all.setObjectName("toolbarSmallBtn")
+        self.btn_collapse_all.setToolTip("Alle Einstellungs-Abschnitte einklappen.")
+        self.btn_collapse_all.clicked.connect(self._collapse_all_sections)
+        toolbar_layout.addWidget(self.btn_collapse_all)
+
+        parent_layout.addWidget(toolbar)
+
+    def _expand_all_sections(self) -> None:
+        for acc in [self.acc_filter, self.acc_artistic, self.acc_contours, self.acc_plotter]:
+            acc.set_expanded(True)
+
+    def _collapse_all_sections(self) -> None:
+        for acc in [self.acc_filter, self.acc_artistic, self.acc_contours, self.acc_plotter]:
+            acc.set_expanded(False)
 
     def _build_sticky_footer(self, parent_layout: QVBoxLayout) -> None:
         """Build sticky bottom footer containing progress bar, status, and recalculate/cancel buttons."""
@@ -326,7 +439,7 @@ class SidebarWidget(QWidget):
         h_status.addWidget(self.lbl_percent, stretch=0)
         layout.addLayout(h_status)
 
-        # Thin sleek progress bar (always visible regardless of active tab or scroll position)
+        # Thin sleek progress bar (always visible regardless of scroll position)
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("stickyProgressBar")
         self.progress_bar.setRange(0, 100)
@@ -363,31 +476,60 @@ class SidebarWidget(QWidget):
 
         parent_layout.addWidget(footer, stretch=0)
 
-    def _update_tab_badges(self) -> None:
-        """Show accent dot badges in tab titles when features in that tab are active."""
-        if not hasattr(self, "tab_widget"):
+    def _update_accordion_badges(self) -> None:
+        """Update status badges on accordion headers to reflect active features."""
+        if (
+            not hasattr(self, "acc_filter")
+            or not hasattr(self, "acc_artistic")
+            or not hasattr(self, "acc_contours")
+            or not hasattr(self, "acc_plotter")
+        ):
             return
 
-        # Tab 0: Artistic modes
-        has_art = hasattr(self, "combo_artistic_mode") and self.combo_artistic_mode.currentIndex() > 0
-        self.tab_widget.setTabText(0, "🎨 Stile •" if has_art else "🎨 Stile")
-        self.tab_widget.setTabToolTip(0, "Künstlerische Kunststile (Joy Division, Spirale, TSP, Delaunay, Flussfeld) & Konturen")
+        # 1. Filter badge
+        has_kuwahara = hasattr(self, "chk_kuwahara") and self.chk_kuwahara.isChecked()
+        if has_kuwahara:
+            r = int(self.slider_kuwahara_r.get_value()) if hasattr(self, "slider_kuwahara_r") else 3
+            self.acc_filter.set_badge(f"• Kuwahara (R={r})", active=True)
+        else:
+            self.acc_filter.set_badge("Standard", active=False)
 
-        # Tab 1: Hatching & Shapes
+        # 2. Artistic badge
+        if hasattr(self, "combo_artistic_mode"):
+            idx = self.combo_artistic_mode.currentIndex()
+            mode_names = ["Keiner", "• Wellenform", "• Spirale", "• TSP-Linie", "• Low-Poly", "• Flussfeld"]
+            if 0 < idx < len(mode_names):
+                self.acc_artistic.set_badge(mode_names[idx], active=True)
+            else:
+                self.acc_artistic.set_badge("Keiner", active=False)
+
+        # 3. Contours & Hatching & Shapes badge
         has_hatch = hasattr(self, "chk_hatching") and self.chk_hatching.isChecked()
         has_shape = hasattr(self, "chk_shapes") and self.chk_shapes.isChecked()
-        self.tab_widget.setTabText(1, "✏️ Schraffur •" if (has_hatch or has_shape) else "✏️ Schraffur")
-        self.tab_widget.setTabToolTip(1, "Bézier-Schraffur für Schatten & Formen-Modus (Punkte, Sterne, Herzen, ASCII)")
+        if has_hatch and has_shape:
+            self.acc_contours.set_badge("• Schraffur + Formen", active=True)
+        elif has_hatch:
+            self.acc_contours.set_badge("• Schraffur aktiv", active=True)
+        elif has_shape:
+            st = self.combo_shape_type.currentText().split()[0] if hasattr(self, "combo_shape_type") else "Formen"
+            self.acc_contours.set_badge(f"• {st}", active=True)
+        else:
+            self.acc_contours.set_badge("Konturen aktiv", active=False)
 
-        # Tab 2: Preprocessing & Filter
-        has_kuwahara = hasattr(self, "chk_kuwahara") and self.chk_kuwahara.isChecked()
-        self.tab_widget.setTabText(2, "🧪 Filter •" if has_kuwahara else "🧪 Filter")
-        self.tab_widget.setTabToolTip(2, "Vorverarbeitung (Kuwahara Ölgemälde, CLAHE Kontrast, Weichzeichner) & Vorschau-Auflösung")
+        # 4. Plotter badge
+        has_tsp = hasattr(self, "chk_tsp") and self.chk_tsp.isChecked()
+        has_two_opt = hasattr(self, "chk_two_opt") and self.chk_two_opt.isChecked()
+        if has_tsp and has_two_opt:
+            self.acc_plotter.set_badge("• TSP + 2-Opt", active=True)
+        elif has_tsp:
+            self.acc_plotter.set_badge("• TSP aktiv", active=True)
+        else:
+            page_sz = self.combo_page.currentText().split()[0] if hasattr(self, "combo_page") else "A4"
+            self.acc_plotter.set_badge(page_sz, active=False)
 
-        # Tab 3: Plotter & Export
-        has_opt = hasattr(self, "chk_tsp") and self.chk_tsp.isChecked()
-        self.tab_widget.setTabText(3, "📐 Plotter •" if has_opt else "📐 Plotter")
-        self.tab_widget.setTabToolTip(3, "SVG/PNG Datei-Export, Papierformate, Strichbreite, Wegoptimierung & Live-Statistiken")
+    def _update_tab_badges(self) -> None:
+        """Backwards compatibility alias for _update_accordion_badges."""
+        self._update_accordion_badges()
 
     # -------------------------------------------------------------------------
     # UI Sections
@@ -525,7 +667,7 @@ class SidebarWidget(QWidget):
 
         self.chk_clahe = QCheckBox("CLAHE Kontrast-Angleichung")
         self.chk_clahe.setChecked(True)
-        self.chk_clahe.stateChanged.connect(self._emit_param_change)
+        self.chk_clahe.stateChanged.connect(self._on_filter_toggled)
         layout.addWidget(self.chk_clahe)
 
         self.slider_clahe_kernel = SliderRow(
@@ -542,7 +684,7 @@ class SidebarWidget(QWidget):
 
         self.chk_blur = QCheckBox("Gaußscher Weichzeichner")
         self.chk_blur.setChecked(True)
-        self.chk_blur.stateChanged.connect(self._emit_param_change)
+        self.chk_blur.stateChanged.connect(self._on_filter_toggled)
         layout.addWidget(self.chk_blur)
 
         self.slider_blur_sigma = SliderRow(
@@ -561,7 +703,7 @@ class SidebarWidget(QWidget):
         self.chk_kuwahara = QCheckBox("Kuwahara Ölgemälde-Filter")
         self.chk_kuwahara.setChecked(False)
         self.chk_kuwahara.setToolTip("Glättet Farbflächen flächig wie Ölgemälde, erhält Hauptkanten aber messerscharf.")
-        self.chk_kuwahara.stateChanged.connect(self._emit_param_change)
+        self.chk_kuwahara.stateChanged.connect(self._on_filter_toggled)
         layout.addWidget(self.chk_kuwahara)
 
         self.slider_kuwahara_r = SliderRow(
@@ -574,12 +716,23 @@ class SidebarWidget(QWidget):
             tooltip="Radius der Kuwahara-Pinselstriche.",
         )
         self.slider_kuwahara_r.sig_value_changed.connect(self._emit_param_change)
+        self.slider_kuwahara_r.setVisible(False)
         layout.addWidget(self.slider_kuwahara_r)
 
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
             self.layout_content.addWidget(box)
+
+    def _on_filter_toggled(self, *args) -> None:
+        """Progressive disclosure for filter sliders."""
+        if hasattr(self, "slider_clahe_kernel"):
+            self.slider_clahe_kernel.setVisible(self.chk_clahe.isChecked())
+        if hasattr(self, "slider_blur_sigma"):
+            self.slider_blur_sigma.setVisible(self.chk_blur.isChecked())
+        if hasattr(self, "slider_kuwahara_r"):
+            self.slider_kuwahara_r.setVisible(self.chk_kuwahara.isChecked())
+        self._emit_param_change()
 
     def _build_line_detection_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         box = QGroupBox("Linienerkennung & Dichte")
@@ -920,14 +1073,19 @@ class SidebarWidget(QWidget):
         self.chk_hatching.stateChanged.connect(self._on_hatching_toggled)
         layout.addWidget(self.chk_hatching)
 
-        layout.addWidget(QLabel("Schraffurstil:"))
+        self.widget_hatching_opts = QWidget()
+        h_layout = QVBoxLayout(self.widget_hatching_opts)
+        h_layout.setContentsMargins(0, 2, 0, 0)
+        h_layout.setSpacing(6)
+
+        h_layout.addWidget(QLabel("Schraffurstil:"))
         self.combo_hatch_mode = QComboBox()
         self.combo_hatch_mode.addItems([
             "Glatte Bézier-Kurven (Formfolgend)",
             "Gerade Striche (Klassisch)",
         ])
         self.combo_hatch_mode.currentIndexChanged.connect(self._emit_param_change)
-        layout.addWidget(self.combo_hatch_mode)
+        h_layout.addWidget(self.combo_hatch_mode)
 
         self.slider_hatch_curve = SliderRow(
             title="Form-Anpassung / Krümmung:",
@@ -939,7 +1097,7 @@ class SidebarWidget(QWidget):
             tooltip="Wie stark sich die Schraffurkurven an die darunterliegenden Kanten und Formverläufe anpassen (0 = gerade, 1 = vollständig formfolgend).",
         )
         self.slider_hatch_curve.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_hatch_curve)
+        h_layout.addWidget(self.slider_hatch_curve)
 
         self.slider_hatch_wobble = SliderRow(
             title="Organische Wellung (Wobble):",
@@ -952,7 +1110,7 @@ class SidebarWidget(QWidget):
             tooltip="Fügt eine subtile, handgezeichnete Vibration hinzu.",
         )
         self.slider_hatch_wobble.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_hatch_wobble)
+        h_layout.addWidget(self.slider_hatch_wobble)
 
         self.slider_hatch_thresh = SliderRow(
             title="Dunkelheits-Schwelle:",
@@ -964,7 +1122,7 @@ class SidebarWidget(QWidget):
             tooltip="Bereiche dunkler als dieser Wert werden schraffiert.",
         )
         self.slider_hatch_thresh.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_hatch_thresh)
+        h_layout.addWidget(self.slider_hatch_thresh)
 
         self.slider_hatch_spacing = SliderRow(
             title="Linienabstand (Dichte):",
@@ -976,7 +1134,7 @@ class SidebarWidget(QWidget):
             tooltip="Abstand paralleler Schraffurlinien.",
         )
         self.slider_hatch_spacing.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_hatch_spacing)
+        h_layout.addWidget(self.slider_hatch_spacing)
 
         self.slider_hatch_angle = SliderRow(
             title="Schraffur-Winkel:",
@@ -988,12 +1146,15 @@ class SidebarWidget(QWidget):
             tooltip="Grundrichtung der Schraffurlinien.",
         )
         self.slider_hatch_angle.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_hatch_angle)
+        h_layout.addWidget(self.slider_hatch_angle)
 
         self.chk_cross_hatch = QCheckBox("Kreuzschraffur für tiefe Schatten")
         self.chk_cross_hatch.setChecked(False)
         self.chk_cross_hatch.stateChanged.connect(self._emit_param_change)
-        layout.addWidget(self.chk_cross_hatch)
+        h_layout.addWidget(self.chk_cross_hatch)
+
+        layout.addWidget(self.widget_hatching_opts)
+        self.widget_hatching_opts.setVisible(False)
 
         if parent_layout is not None:
             parent_layout.addWidget(box)
@@ -1009,18 +1170,23 @@ class SidebarWidget(QWidget):
 
     def _build_shapes_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         """Build the Shapes mode control section."""
-        box = QGroupBox("\u2728 Formen-Modus (Shapes)")
+        box = QGroupBox("✨ Formen-Modus (Shapes)")
         layout = QVBoxLayout(box)
         layout.setSpacing(6)
 
         # Enable toggle
         self.chk_shapes = QCheckBox("Formen-Modus aktivieren")
         self.chk_shapes.setChecked(False)
-        self.chk_shapes.stateChanged.connect(self._emit_param_change)
+        self.chk_shapes.stateChanged.connect(self._on_shapes_toggled)
         layout.addWidget(self.chk_shapes)
 
+        self.widget_shapes_opts = QWidget()
+        s_layout = QVBoxLayout(self.widget_shapes_opts)
+        s_layout.setContentsMargins(0, 2, 0, 0)
+        s_layout.setSpacing(6)
+
         # Shape type
-        layout.addWidget(QLabel("Formtyp:"))
+        s_layout.addWidget(QLabel("Formtyp:"))
         self.combo_shape_type = QComboBox()
         self.combo_shape_type.addItems([
             "Punkte (Dots)", "Kreise (Kontur)", "Rechtecke",
@@ -1028,50 +1194,50 @@ class SidebarWidget(QWidget):
             "Hexagons", "Spiralen", "Herzen", "ASCII-Zeichen",
         ])
         self.combo_shape_type.currentIndexChanged.connect(self._on_shape_type_changed)
-        layout.addWidget(self.combo_shape_type)
+        s_layout.addWidget(self.combo_shape_type)
 
         # ASCII charset (only visible for ASCII mode)
-        self.lbl_ascii_charset = QLabel("Zeichensatz (dunkel \u2192 hell):")
+        self.lbl_ascii_charset = QLabel("Zeichensatz (dunkel → hell):")
         self.edit_ascii_charset = QLineEdit("@#S%?*+;:,. ")
         self.edit_ascii_charset.textChanged.connect(self._emit_param_change)
-        layout.addWidget(self.lbl_ascii_charset)
-        layout.addWidget(self.edit_ascii_charset)
+        s_layout.addWidget(self.lbl_ascii_charset)
+        s_layout.addWidget(self.edit_ascii_charset)
         self.lbl_ascii_charset.setVisible(False)
         self.edit_ascii_charset.setVisible(False)
 
         # Placement
-        layout.addWidget(QLabel("Platzierung:"))
+        s_layout.addWidget(QLabel("Platzierung:"))
         self.combo_shape_placement = QComboBox()
-        self.combo_shape_placement.addItems(["Raster (Grid)", "Zuf\u00e4llig (Random)"])
+        self.combo_shape_placement.addItems(["Raster (Grid)", "Zufällig (Random)"])
         self.combo_shape_placement.currentIndexChanged.connect(self._emit_param_change)
-        layout.addWidget(self.combo_shape_placement)
+        s_layout.addWidget(self.combo_shape_placement)
 
         # Size sliders
         self.slider_shape_min_size = SliderRow(
-            title="Min. Gr\u00f6\u00dfe (helle Bereiche):",
+            title="Min. Größe (helle Bereiche):",
             min_val=1.0,
             max_val=30.0,
             default_val=2.0,
             step=0.5,
             decimals=1,
             suffix="px",
-            tooltip="Minimale Formgr\u00f6\u00dfe in hellen Bildbereichen.",
+            tooltip="Minimale Formgröße in hellen Bildbereichen.",
         )
         self.slider_shape_min_size.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_shape_min_size)
+        s_layout.addWidget(self.slider_shape_min_size)
 
         self.slider_shape_max_size = SliderRow(
-            title="Max. Gr\u00f6\u00dfe (dunkle Bereiche):",
+            title="Max. Größe (dunkle Bereiche):",
             min_val=2.0,
             max_val=60.0,
             default_val=20.0,
             step=1.0,
             decimals=0,
             suffix="px",
-            tooltip="Maximale Formgr\u00f6\u00dfe in dunklen Bildbereichen.",
+            tooltip="Maximale Formgröße in dunklen Bildbereichen.",
         )
         self.slider_shape_max_size.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_shape_max_size)
+        s_layout.addWidget(self.slider_shape_max_size)
 
         # Density
         self.slider_shape_density = SliderRow(
@@ -1081,31 +1247,31 @@ class SidebarWidget(QWidget):
             default_val=0.6,
             step=0.05,
             decimals=2,
-            tooltip="Anzahl der Formen pro Fl\u00e4che. H\u00f6herer Wert = dichter.",
+            tooltip="Anzahl der Formen pro Fläche. Höherer Wert = dichter.",
         )
         self.slider_shape_density.sig_value_changed.connect(self._emit_param_change)
-        layout.addWidget(self.slider_shape_density)
+        s_layout.addWidget(self.slider_shape_density)
 
         # Brightness-driven size and density
-        self.chk_shape_size_by_bright = QCheckBox("Gr\u00f6\u00dfe nach Helligkeit (dunkel = gro\u00df)")
+        self.chk_shape_size_by_bright = QCheckBox("Größe nach Helligkeit (dunkel = groß)")
         self.chk_shape_size_by_bright.setChecked(True)
         self.chk_shape_size_by_bright.stateChanged.connect(self._emit_param_change)
-        layout.addWidget(self.chk_shape_size_by_bright)
+        s_layout.addWidget(self.chk_shape_size_by_bright)
 
         self.chk_shape_density_by_bright = QCheckBox("Dichte nach Helligkeit (dunkel = mehr)")
         self.chk_shape_density_by_bright.setChecked(True)
         self.chk_shape_density_by_bright.stateChanged.connect(self._emit_param_change)
-        layout.addWidget(self.chk_shape_density_by_bright)
+        s_layout.addWidget(self.chk_shape_density_by_bright)
 
         # Rotation mode
-        layout.addWidget(QLabel("Rotationsmodus:"))
+        s_layout.addWidget(QLabel("Rotationsmodus:"))
         self.combo_shape_rotation = QComboBox()
         self.combo_shape_rotation.addItems([
-            "Keine Rotation", "Zuf\u00e4llig", "Gradientenausgerichtet", "Gemischt",
+            "Keine Rotation", "Zufällig", "Gradientenausgerichtet", "Gemischt",
         ])
         self.combo_shape_rotation.setCurrentIndex(1)  # default: random
         self.combo_shape_rotation.currentIndexChanged.connect(self._on_shape_rotation_changed)
-        layout.addWidget(self.combo_shape_rotation)
+        s_layout.addWidget(self.combo_shape_rotation)
 
         self.slider_shape_gradient_align = SliderRow(
             title="Gradient-Einfluss:",
@@ -1114,25 +1280,34 @@ class SidebarWidget(QWidget):
             default_val=0.5,
             step=0.05,
             decimals=2,
-            tooltip="0 = rein zuf\u00e4llig, 1 = vollst\u00e4ndig gradientenausgerichtet (nur im Gemischt-Modus).",
+            tooltip="0 = rein zufällig, 1 = vollständig gradientenausgerichtet (nur im Gemischt-Modus).",
         )
         self.slider_shape_gradient_align.sig_value_changed.connect(self._emit_param_change)
         self.slider_shape_gradient_align.setVisible(False)
-        layout.addWidget(self.slider_shape_gradient_align)
+        s_layout.addWidget(self.slider_shape_gradient_align)
 
-        # Randomize button
+        # Randomize button inside shapes
         self.btn_randomize = QPushButton("🎲  Alle Einstellungen zufällig würfeln")
         self.btn_randomize.setObjectName("randomizeButton")
         self.btn_randomize.setToolTip(
             "Setzt ALLE Parameter (Vorverarbeitung, Linien, Zeichenstil, Schraffur, Formen und Strichstärke) auf zufällige, erlaubte Werte und berechnet die Vorschau neu."
         )
         self.btn_randomize.clicked.connect(self._randomize_all_params)
-        layout.addWidget(self.btn_randomize)
+        s_layout.addWidget(self.btn_randomize)
+
+        layout.addWidget(self.widget_shapes_opts)
+        self.widget_shapes_opts.setVisible(False)
 
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
             self.layout_content.addWidget(box)
+
+    def _on_shapes_toggled(self, state: int) -> None:
+        """Progressive disclosure for shapes options."""
+        if hasattr(self, "widget_shapes_opts"):
+            self.widget_shapes_opts.setVisible(self.chk_shapes.isChecked())
+        self._emit_param_change()
 
     def _on_shape_type_changed(self, idx: int) -> None:
         """Show/hide ASCII charset field depending on selected shape type."""
@@ -1533,8 +1708,15 @@ class SidebarWidget(QWidget):
         self.chk_two_opt.setVisible(p.sort_paths)
         self.chk_two_opt.setChecked(p.two_opt)
 
+        # Progressive disclosure visibility updates
+        self._on_filter_toggled()
+        if hasattr(self, "widget_hatching_opts"):
+            self.widget_hatching_opts.setVisible(p.use_hatching)
+        if hasattr(self, "widget_shapes_opts"):
+            self.widget_shapes_opts.setVisible(p.use_shapes)
+
         self._block_signals = False
-        self._update_tab_badges()
+        self._update_accordion_badges()
 
     def update_statistics(self, stats: PlotStats) -> None:
         """Display computation statistics in the statistics panel."""
@@ -1603,18 +1785,18 @@ class SidebarWidget(QWidget):
             p.output_path = self.edit_output.text().strip()
             self.apply_parameters(p)
             self._update_preset_delete_button_state()
-            self._update_tab_badges()
+            self._update_accordion_badges()
 
-            # Context-sensitive tab selection based on preset mode
-            if hasattr(self, "tab_widget"):
+            # Context-sensitive accordion expansion based on preset mode
+            if hasattr(self, "acc_artistic"):
                 if p.artistic_mode and p.artistic_mode != "none":
-                    self.tab_widget.setCurrentIndex(0)  # 🎨 Stile
+                    self.acc_artistic.set_expanded(True)
                 elif p.use_shapes or p.use_hatching:
-                    self.tab_widget.setCurrentIndex(1)  # ✏️ Schraffur
+                    self.acc_contours.set_expanded(True)
                 elif p.use_kuwahara:
-                    self.tab_widget.setCurrentIndex(2)  # 🧪 Filter
+                    self.acc_filter.set_expanded(True)
                 elif p.sort_paths:
-                    self.tab_widget.setCurrentIndex(3)  # 📐 Plotter
+                    self.acc_plotter.set_expanded(True)
 
             self._emit_param_change()
 
@@ -1741,6 +1923,8 @@ class SidebarWidget(QWidget):
         self._emit_param_change()
 
     def _on_hatching_toggled(self, state: int) -> None:
+        if hasattr(self, "widget_hatching_opts"):
+            self.widget_hatching_opts.setVisible(self.chk_hatching.isChecked())
         self._emit_param_change()
 
     def _on_tsp_toggled(self, state: int) -> None:

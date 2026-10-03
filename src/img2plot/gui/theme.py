@@ -484,6 +484,57 @@ QWidget#sidebarHeader {
     background-color: #121214;
 }
 
+/* Accordion Section Styles */
+QPushButton#accordionHeader {
+    background-color: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 6px;
+    padding: 6px 8px;
+    text-align: left;
+}
+
+QPushButton#accordionHeader:hover {
+    background-color: #222226;
+    border-color: #3f3f46;
+}
+
+QPushButton#accordionHeader[expanded="true"] {
+    background-color: #1a1b22;
+    border-color: #38bdf8;
+    border-bottom-left-radius: 0px;
+    border-bottom-right-radius: 0px;
+}
+
+QWidget#accordionContent {
+    background-color: #121214;
+    border: 1px solid #27272a;
+    border-top: none;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+/* Small toolbar buttons */
+QPushButton#toolbarSmallBtn {
+    background-color: #18181b;
+    color: #a1a1aa;
+    border: 1px solid #27272a;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+QPushButton#toolbarSmallBtn:hover {
+    background-color: #27272a;
+    color: #f4f4f5;
+    border-color: #3f3f46;
+}
+
+QPushButton#toolbarSmallBtn:pressed {
+    background-color: #09090b;
+    color: #38bdf8;
+}
+
 QToolTip {
     background-color: #18181b;
     color: #f4f4f5;
