@@ -231,6 +231,7 @@ class SidebarWidget(QWidget):
         self._build_preset_section()
         self._build_preview_control_section()
         self._build_preprocessing_section()
+        self._build_artistic_modes_section()
         self._build_line_detection_section()
         self._build_style_section()
         self._build_hatching_section()
@@ -421,6 +422,25 @@ class SidebarWidget(QWidget):
         self.slider_blur_sigma.sig_value_changed.connect(self._emit_param_change)
         layout.addWidget(self.slider_blur_sigma)
 
+        # Kuwahara filter for oil painting look
+        self.chk_kuwahara = QCheckBox("Kuwahara Ölgemälde-Filter")
+        self.chk_kuwahara.setChecked(False)
+        self.chk_kuwahara.setToolTip("Glättet Farbflächen flächig wie Ölgemälde, erhält Hauptkanten aber messerscharf.")
+        self.chk_kuwahara.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_kuwahara)
+
+        self.slider_kuwahara_r = SliderRow(
+            title="Ölgemälde-Pinselgröße (Radius):",
+            min_val=1,
+            max_val=8,
+            default_val=3,
+            step=1,
+            suffix="px",
+            tooltip="Radius der Kuwahara-Pinselstriche.",
+        )
+        self.slider_kuwahara_r.sig_value_changed.connect(self._emit_param_change)
+        layout.addWidget(self.slider_kuwahara_r)
+
         self.layout_content.addWidget(box)
 
     def _build_line_detection_section(self) -> None:
@@ -525,6 +545,223 @@ class SidebarWidget(QWidget):
         layout.addWidget(self.slider_sample_step)
 
         self.layout_content.addWidget(box)
+
+    _ARTISTIC_MODE_VALUES = ["none", "waveform", "spiral", "tsp", "delaunay", "flowfield"]
+
+    def _build_artistic_modes_section(self) -> None:
+        """Build the non-AI artistic styles control section."""
+        box = QGroupBox("🎨 Künstlerische Stile (Artistic Modes)")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(6)
+
+        layout.addWidget(QLabel("Kunststil auswählen:"))
+        self.combo_artistic_mode = QComboBox()
+        self.combo_artistic_mode.addItems([
+            "Keiner (Klassische Konturzeichnung)",
+            "Wellenform / Joy Division (3D-Relief)",
+            "Archimedische Spirale (1 durchgehende Linie)",
+            "TSP Single-Line (Handlungsreisender)",
+            "Low-Poly (Delaunay-Mosaik)",
+            "Flussfeld (Van-Gogh-Streamlines)",
+        ])
+        self.combo_artistic_mode.currentIndexChanged.connect(self._on_artistic_mode_changed)
+        layout.addWidget(self.combo_artistic_mode)
+
+        self.chk_artistic_overlay = QCheckBox("Hauptkonturen zusätzlich überlagern")
+        self.chk_artistic_overlay.setChecked(False)
+        self.chk_artistic_overlay.setToolTip("Zeichnet zusätzlich zum Kunststil die erkannten Hauptkanten.")
+        self.chk_artistic_overlay.stateChanged.connect(self._emit_param_change)
+        layout.addWidget(self.chk_artistic_overlay)
+
+        # --- Waveform controls ---
+        self.widget_waveform_opts = QWidget()
+        w_layout = QVBoxLayout(self.widget_waveform_opts)
+        w_layout.setContentsMargins(0, 0, 0, 0)
+        w_layout.setSpacing(4)
+
+        self.slider_wave_lines = SliderRow(
+            title="Wellenlinien-Anzahl:",
+            min_val=20,
+            max_val=120,
+            default_val=60,
+            step=5,
+            tooltip="Anzahl der horizontalen Scanlinien über das Bild.",
+        )
+        self.slider_wave_lines.sig_value_changed.connect(self._emit_param_change)
+        w_layout.addWidget(self.slider_wave_lines)
+
+        self.slider_wave_amp = SliderRow(
+            title="Wellen-Ausschlag (Amplitude):",
+            min_val=5.0,
+            max_val=50.0,
+            default_val=20.0,
+            step=1.0,
+            decimals=1,
+            suffix="px",
+            tooltip="Maximale Auslenkung der Wellen in dunklen Bildbereichen.",
+        )
+        self.slider_wave_amp.sig_value_changed.connect(self._emit_param_change)
+        w_layout.addWidget(self.slider_wave_amp)
+
+        self.chk_wave_occlusion = QCheckBox("3D-Verdeckung (Hintergrundlinien verbergen)")
+        self.chk_wave_occlusion.setChecked(True)
+        self.chk_wave_occlusion.setToolTip("Klassischer Joy-Division-Effekt: Vordergrundberge verdecken dahinterliegende Linien.")
+        self.chk_wave_occlusion.stateChanged.connect(self._emit_param_change)
+        w_layout.addWidget(self.chk_wave_occlusion)
+        layout.addWidget(self.widget_waveform_opts)
+
+        # --- Spiral controls ---
+        self.widget_spiral_opts = QWidget()
+        s_layout = QVBoxLayout(self.widget_spiral_opts)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(4)
+
+        self.slider_spiral_loops = SliderRow(
+            title="Spiral-Windungen (Umdrehungen):",
+            min_val=20,
+            max_val=120,
+            default_val=60,
+            step=5,
+            tooltip="Gesamtzahl der Spiralwindungen von innen nach außen.",
+        )
+        self.slider_spiral_loops.sig_value_changed.connect(self._emit_param_change)
+        s_layout.addWidget(self.slider_spiral_loops)
+
+        self.slider_spiral_amp = SliderRow(
+            title="Schwingungs-Amplitude:",
+            min_val=1.0,
+            max_val=12.0,
+            default_val=4.0,
+            step=0.5,
+            decimals=1,
+            suffix="px",
+            tooltip="Stärke der Zickzack-/Wellenmodulation in dunklen Bereichen.",
+        )
+        self.slider_spiral_amp.sig_value_changed.connect(self._emit_param_change)
+        s_layout.addWidget(self.slider_spiral_amp)
+
+        self.slider_spiral_freq = SliderRow(
+            title="Schwingungs-Frequenz:",
+            min_val=5.0,
+            max_val=60.0,
+            default_val=30.0,
+            step=2.0,
+            decimals=0,
+            tooltip="Wellenfrequenz entlang des Spiralarms.",
+        )
+        self.slider_spiral_freq.sig_value_changed.connect(self._emit_param_change)
+        s_layout.addWidget(self.slider_spiral_freq)
+        layout.addWidget(self.widget_spiral_opts)
+
+        # --- TSP controls ---
+        self.widget_tsp_opts = QWidget()
+        t_layout = QVBoxLayout(self.widget_tsp_opts)
+        t_layout.setContentsMargins(0, 0, 0, 0)
+        t_layout.setSpacing(4)
+
+        self.slider_tsp_points = SliderRow(
+            title="Punktanzahl (Dichte):",
+            min_val=300,
+            max_val=2500,
+            default_val=1200,
+            step=50,
+            tooltip="Anzahl der Stipple-Punkte, die zu einer einzigen Linie verbunden werden.",
+        )
+        self.slider_tsp_points.sig_value_changed.connect(self._emit_param_change)
+        t_layout.addWidget(self.slider_tsp_points)
+
+        self.slider_tsp_passes = SliderRow(
+            title="2-Opt Entflechtung (Durchläufe):",
+            min_val=3,
+            max_val=30,
+            default_val=15,
+            step=1,
+            tooltip="Anzahl der Optimierungsdurchläufe zur Beseitigung von Linienkreuzungen.",
+        )
+        self.slider_tsp_passes.sig_value_changed.connect(self._emit_param_change)
+        t_layout.addWidget(self.slider_tsp_passes)
+        layout.addWidget(self.widget_tsp_opts)
+
+        # --- Delaunay controls ---
+        self.widget_delaunay_opts = QWidget()
+        d_layout = QVBoxLayout(self.widget_delaunay_opts)
+        d_layout.setContentsMargins(0, 0, 0, 0)
+        d_layout.setSpacing(4)
+
+        self.slider_delaunay_points = SliderRow(
+            title="Polygonanzahl / Knoten:",
+            min_val=200,
+            max_val=2000,
+            default_val=800,
+            step=50,
+            tooltip="Anzahl der Dreiecksknoten für das Low-Poly-Mosaik.",
+        )
+        self.slider_delaunay_points.sig_value_changed.connect(self._emit_param_change)
+        d_layout.addWidget(self.slider_delaunay_points)
+
+        self.slider_delaunay_weight = SliderRow(
+            title="Kanten- vs. Schattenfokus:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.6,
+            step=0.05,
+            decimals=2,
+            tooltip="0.0 = Punkte nach Helligkeit, 1.0 = Punkte dicht an Objektkanten.",
+        )
+        self.slider_delaunay_weight.sig_value_changed.connect(self._emit_param_change)
+        d_layout.addWidget(self.slider_delaunay_weight)
+        layout.addWidget(self.widget_delaunay_opts)
+
+        # --- Flowfield controls ---
+        self.widget_flow_opts = QWidget()
+        f_layout = QVBoxLayout(self.widget_flow_opts)
+        f_layout.setContentsMargins(0, 0, 0, 0)
+        f_layout.setSpacing(4)
+
+        self.slider_flow_lines = SliderRow(
+            title="Linienanzahl (Streamlines):",
+            min_val=200,
+            max_val=1600,
+            default_val=800,
+            step=50,
+            tooltip="Anzahl der virtuellen Pinselstriche.",
+        )
+        self.slider_flow_lines.sig_value_changed.connect(self._emit_param_change)
+        f_layout.addWidget(self.slider_flow_lines)
+
+        self.slider_flow_steps = SliderRow(
+            title="Maximale Strichlänge:",
+            min_val=10,
+            max_val=80,
+            default_val=40,
+            step=5,
+            tooltip="Maximale Schrittweite je Flusslinie.",
+        )
+        self.slider_flow_steps.sig_value_changed.connect(self._emit_param_change)
+        f_layout.addWidget(self.slider_flow_steps)
+
+        f_layout.addWidget(QLabel("Flussrichtung:"))
+        self.combo_flow_dir = QComboBox()
+        self.combo_flow_dir.addItems([
+            "Entlang von Objektkanten (Tangential)",
+            "Quer zu Kanten (Gradient)",
+        ])
+        self.combo_flow_dir.currentIndexChanged.connect(self._emit_param_change)
+        f_layout.addWidget(self.combo_flow_dir)
+        layout.addWidget(self.widget_flow_opts)
+
+        self.layout_content.addWidget(box)
+        self._on_artistic_mode_changed(0)
+
+    def _on_artistic_mode_changed(self, idx: int) -> None:
+        """Update visibility of sub-controls according to selected artistic mode."""
+        self.widget_waveform_opts.setVisible(idx == 1)
+        self.widget_spiral_opts.setVisible(idx == 2)
+        self.widget_tsp_opts.setVisible(idx == 3)
+        self.widget_delaunay_opts.setVisible(idx == 4)
+        self.widget_flow_opts.setVisible(idx == 5)
+        self.chk_artistic_overlay.setVisible(idx > 0)
+        self._emit_param_change()
 
     def _build_hatching_section(self) -> None:
         box = QGroupBox("Schraffur (Hatching) für Schatten")
@@ -943,20 +1180,25 @@ class SidebarWidget(QWidget):
         self.lbl_stat_shapes.setStyleSheet("color: #a78bfa; font-weight: bold;")
         layout.addWidget(self.lbl_stat_shapes, 2, 1)
 
-        layout.addWidget(QLabel("Zeichenlänge gesamt:"), 3, 0)
+        layout.addWidget(QLabel("Kunststil-Pfade:"), 3, 0)
+        self.lbl_stat_artistic = QLabel("0")
+        self.lbl_stat_artistic.setStyleSheet("color: #ec4899; font-weight: bold;")
+        layout.addWidget(self.lbl_stat_artistic, 3, 1)
+
+        layout.addWidget(QLabel("Zeichenlänge gesamt:"), 4, 0)
         self.lbl_stat_len = QLabel("0.0 m")
         self.lbl_stat_len.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_len, 3, 1)
+        layout.addWidget(self.lbl_stat_len, 4, 1)
 
-        layout.addWidget(QLabel("Leerweg (Pen-Up):"), 4, 0)
+        layout.addWidget(QLabel("Leerweg (Pen-Up):"), 5, 0)
         self.lbl_stat_penup = QLabel("0.0 m")
         self.lbl_stat_penup.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_penup, 4, 1)
+        layout.addWidget(self.lbl_stat_penup, 5, 1)
 
-        layout.addWidget(QLabel("Berechnungsdauer:"), 5, 0)
+        layout.addWidget(QLabel("Berechnungsdauer:"), 6, 0)
         self.lbl_stat_time = QLabel("0.0 s")
         self.lbl_stat_time.setStyleSheet("color: #38bdf8; font-weight: bold;")
-        layout.addWidget(self.lbl_stat_time, 5, 1)
+        layout.addWidget(self.lbl_stat_time, 6, 1)
 
         self.layout_content.addWidget(box)
 
@@ -975,6 +1217,26 @@ class SidebarWidget(QWidget):
         p.clahe_kernel_size = int(self.slider_clahe_kernel.get_value())
         p.use_gaussian_blur = self.chk_blur.isChecked()
         p.gaussian_kernel_size = self.slider_blur_sigma.get_value()
+        p.use_kuwahara = self.chk_kuwahara.isChecked()
+        p.kuwahara_radius = int(self.slider_kuwahara_r.get_value())
+
+        # Artistic mode
+        a_idx = self.combo_artistic_mode.currentIndex()
+        p.artistic_mode = self._ARTISTIC_MODE_VALUES[a_idx] if 0 <= a_idx < len(self._ARTISTIC_MODE_VALUES) else "none"
+        p.artistic_overlay_contours = self.chk_artistic_overlay.isChecked()
+        p.waveform_lines = int(self.slider_wave_lines.get_value())
+        p.waveform_amplitude = self.slider_wave_amp.get_value()
+        p.waveform_occlusion = self.chk_wave_occlusion.isChecked()
+        p.spiral_loops = int(self.slider_spiral_loops.get_value())
+        p.spiral_amplitude = self.slider_spiral_amp.get_value()
+        p.spiral_frequency = self.slider_spiral_freq.get_value()
+        p.tsp_points = int(self.slider_tsp_points.get_value())
+        p.tsp_2opt_passes = int(self.slider_tsp_passes.get_value())
+        p.delaunay_points = int(self.slider_delaunay_points.get_value())
+        p.delaunay_edge_weight = self.slider_delaunay_weight.get_value()
+        p.flowfield_lines = int(self.slider_flow_lines.get_value())
+        p.flowfield_max_steps = int(self.slider_flow_steps.get_value())
+        p.flowfield_direction = "tangent" if self.combo_flow_dir.currentIndex() == 0 else "gradient"
 
         p.termination_ratio = self.slider_term_ratio.get_value()
         p.line_continue_thresh = self.slider_continue_thresh.get_value()
@@ -1033,6 +1295,30 @@ class SidebarWidget(QWidget):
         self.slider_clahe_kernel.set_value(p.clahe_kernel_size)
         self.chk_blur.setChecked(p.use_gaussian_blur)
         self.slider_blur_sigma.set_value(p.gaussian_kernel_size)
+        self.chk_kuwahara.setChecked(p.use_kuwahara)
+        self.slider_kuwahara_r.set_value(p.kuwahara_radius)
+
+        # Artistic mode
+        try:
+            art_idx = self._ARTISTIC_MODE_VALUES.index(p.artistic_mode.lower())
+        except ValueError:
+            art_idx = 0
+        self.combo_artistic_mode.setCurrentIndex(art_idx)
+        self.chk_artistic_overlay.setChecked(p.artistic_overlay_contours)
+        self.slider_wave_lines.set_value(p.waveform_lines)
+        self.slider_wave_amp.set_value(p.waveform_amplitude)
+        self.chk_wave_occlusion.setChecked(p.waveform_occlusion)
+        self.slider_spiral_loops.set_value(p.spiral_loops)
+        self.slider_spiral_amp.set_value(p.spiral_amplitude)
+        self.slider_spiral_freq.set_value(p.spiral_frequency)
+        self.slider_tsp_points.set_value(p.tsp_points)
+        self.slider_tsp_passes.set_value(p.tsp_2opt_passes)
+        self.slider_delaunay_points.set_value(p.delaunay_points)
+        self.slider_delaunay_weight.set_value(p.delaunay_edge_weight)
+        self.slider_flow_lines.set_value(p.flowfield_lines)
+        self.slider_flow_steps.set_value(p.flowfield_max_steps)
+        self.combo_flow_dir.setCurrentIndex(0 if p.flowfield_direction == "tangent" else 1)
+        self._on_artistic_mode_changed(art_idx)
 
         self.slider_term_ratio.set_value(p.termination_ratio)
         self.slider_continue_thresh.set_value(p.line_continue_thresh)
@@ -1095,6 +1381,7 @@ class SidebarWidget(QWidget):
         self.lbl_stat_lines.setText(f"{stats.contour_strokes}")
         self.lbl_stat_hatch.setText(f"{stats.hatch_strokes}")
         self.lbl_stat_shapes.setText(f"{stats.shape_strokes}")
+        self.lbl_stat_artistic.setText(f"{stats.artistic_strokes}")
 
         mm_per_px = 0.264583
         draw_m = (stats.total_length_px * mm_per_px) / 1000.0

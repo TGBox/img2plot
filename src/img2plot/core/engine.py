@@ -18,6 +18,12 @@ import skimage.draw
 from .parameters import PlotParameters
 from .bezier import Point, CubicSegment, fit_cubic_spline, segments_to_svg_path, discretize_segments
 from .hatching import generate_hatching
+from .kuwahara import apply_kuwahara
+from .waveform import generate_waveform
+from .spiral import generate_spiral
+from .tsp_art import generate_tsp_art
+from .delaunay_art import generate_delaunay_art
+from .flowfield import generate_flowfield
 
 Point2D = Tuple[float, float]
 
@@ -34,6 +40,7 @@ class StrokePath:
     svg_d: str = ""
     is_hatch: bool = False
     is_shape: bool = False
+    is_artistic: bool = False
     shape_metadata: dict = field(default_factory=dict)
 
     def length(self) -> float:
@@ -66,6 +73,7 @@ class PlotStats:
     contour_strokes: int = 0
     hatch_strokes: int = 0
     shape_strokes: int = 0
+    artistic_strokes: int = 0
     total_length_px: float = 0.0
     pen_up_distance_px: float = 0.0
     elapsed_time_sec: float = 0.0
@@ -477,6 +485,8 @@ class PlotEngine:
             self.params.clahe_clip_limit,
             self.params.use_gaussian_blur,
             self.params.gaussian_kernel_size,
+            self.params.use_kuwahara,
+            self.params.kuwahara_radius,
         )
 
         if filter_cache_key in _PREPROCESS_CACHE:
@@ -497,7 +507,11 @@ class PlotEngine:
 
             update_progress(0.15, "Vorverarbeitung (Filter & Kontrast)...")
 
-            # 2. Preprocessing: CLAHE
+            # 2. Preprocessing: Kuwahara Filter (Ölgemälde)
+            if self.params.use_kuwahara and self.params.kuwahara_radius >= 1:
+                norm_gray = apply_kuwahara(norm_gray, radius=self.params.kuwahara_radius)
+
+            # 3. Preprocessing: CLAHE
             if self.params.use_clahe:
                 norm_gray = skimage.exposure.equalize_adapthist(
                     norm_gray,
@@ -505,7 +519,7 @@ class PlotEngine:
                     clip_limit=self.params.clahe_clip_limit,
                 )
 
-            # 3. Preprocessing: Gaussian Blur
+            # 4. Preprocessing: Gaussian Blur
             if self.params.use_gaussian_blur and self.params.gaussian_kernel_size > 0:
                 norm_gray = scipy.ndimage.gaussian_filter(
                     norm_gray, sigma=self.params.gaussian_kernel_size
@@ -545,6 +559,9 @@ class PlotEngine:
 
         update_progress(0.35, "Linien werden extrahiert...")
 
+        # Determine whether standard edge-following contour tracing should be executed
+        should_trace_contours = (self.params.artistic_mode == "none") or self.params.artistic_overlay_contours
+
         init_max_p = float(mag.max())
         term_thresh = init_max_p * self.params.termination_ratio
         cmax = init_max_p
@@ -554,80 +571,136 @@ class PlotEngine:
         paths: List[StrokePath] = []
         is_bezier = self.params.line_mode.lower() == "bezier"
 
-        while cmax > term_thresh and iteration < max_iter:
-            if is_cancelled and is_cancelled():
-                break
-
-            iteration += 1
-            if iteration % 50 == 0:
-                time.sleep(0.0001)  # Yield Python GIL to keep GUI thread completely fluid
+        if should_trace_contours:
+            update_progress(0.35, "Linien werden extrahiert...")
+            while cmax > term_thresh and iteration < max_iter:
                 if is_cancelled and is_cancelled():
                     break
-                p_progress = 0.35 + 0.45 * (1.0 - (cmax - term_thresh) / max(1e-6, init_max_p - term_thresh))
-                update_progress(min(0.80, p_progress), f"Linien extrahieren ({len(paths)} Linien)...")
 
-            pix_idx = int(mag.argmax())
-            py = pix_idx // w
-            px = pix_idx % w
-            cmax = float(mag[py, px])
+                iteration += 1
+                if iteration % 50 == 0:
+                    time.sleep(0.0001)  # Yield Python GIL to keep GUI thread completely fluid
+                    if is_cancelled and is_cancelled():
+                        break
+                    p_progress = 0.35 + 0.45 * (1.0 - (cmax - term_thresh) / max(1e-6, init_max_p - term_thresh))
+                    update_progress(min(0.80, p_progress), f"Linien extrahieren ({len(paths)} Linien)...")
 
-            full_pts, total_len = trace_line_from_gradient(
-                mag=mag,
-                px=px,
-                py=py,
-                grad_x=grad_x,
-                grad_y=grad_y,
-                line_continue_thresh=self.params.line_continue_thresh,
-                max_curve_angle_deg=self.params.max_curve_angle_deg,
-                lpf_atk=self.params.lpf_atk,
-            )
+                pix_idx = int(mag.argmax())
+                py = pix_idx // w
+                px = pix_idx % w
+                cmax = float(mag[py, px])
 
-            if total_len < self.params.min_line_length or len(full_pts) < 2:
-                # Suppress the failed peak neighborhood so argmax() does not get stuck in repetitive iterations
-                mag[max(0, py - 1) : min(h, py + 2), max(0, px - 1) : min(w, px + 2)] = 0.0
-                continue
-
-            start_pt = full_pts[0]
-            end_pt = full_pts[-1]
-
-            # Construct path representation
-            if is_bezier and len(full_pts) >= 3:
-                cubic_segs = fit_cubic_spline(
-                    full_pts,
-                    tension=self.params.bezier_smoothness,
-                    sample_step=self.params.curve_sample_step,
-                )
-                svg_d = segments_to_svg_path(cubic_segs)
-                stroke = StrokePath(
-                    points=full_pts,
-                    is_bezier=True,
-                    cubic_segments=cubic_segs,
-                    svg_d=svg_d,
-                    is_hatch=False,
-                )
-            else:
-                svg_d = f"M {start_pt[0]:.2f},{start_pt[1]:.2f} L {end_pt[0]:.2f},{end_pt[1]:.2f}"
-                stroke = StrokePath(
-                    points=[start_pt, end_pt],
-                    is_bezier=False,
-                    svg_d=svg_d,
-                    is_hatch=False,
+                full_pts, total_len = trace_line_from_gradient(
+                    mag=mag,
+                    px=px,
+                    py=py,
+                    grad_x=grad_x,
+                    grad_y=grad_y,
+                    line_continue_thresh=self.params.line_continue_thresh,
+                    max_curve_angle_deg=self.params.max_curve_angle_deg,
+                    lpf_atk=self.params.lpf_atk,
                 )
 
-            paths.append(stroke)
+                if total_len < self.params.min_line_length or len(full_pts) < 2:
+                    # Suppress the failed peak neighborhood so argmax() does not get stuck in repetitive iterations
+                    mag[max(0, py - 1) : min(h, py + 2), max(0, px - 1) : min(w, px + 2)] = 0.0
+                    continue
 
-            # Suppress edge magnitude along the drawn path so it is not re-visited
-            sy = int(round(start_pt[1]))
-            sx = int(round(start_pt[0]))
-            ey = int(round(end_pt[1]))
-            ex = int(round(end_pt[0]))
+                start_pt = full_pts[0]
+                end_pt = full_pts[-1]
 
-            rr, cc, _ = skimage.draw.line_aa(sy, sx, ey, ex)
-            valid = (rr >= 0) & (rr < h) & (cc >= 0) & (cc < w)
-            mag[rr[valid], cc[valid]] = 0.0
-            mag[py, px] = 0.0
+                # Construct path representation
+                if is_bezier and len(full_pts) >= 3:
+                    cubic_segs = fit_cubic_spline(
+                        full_pts,
+                        tension=self.params.bezier_smoothness,
+                        sample_step=self.params.curve_sample_step,
+                    )
+                    svg_d = segments_to_svg_path(cubic_segs)
+                    stroke = StrokePath(
+                        points=full_pts,
+                        is_bezier=True,
+                        cubic_segments=cubic_segs,
+                        svg_d=svg_d,
+                        is_hatch=False,
+                    )
+                else:
+                    svg_d = f"M {start_pt[0]:.2f},{start_pt[1]:.2f} L {end_pt[0]:.2f},{end_pt[1]:.2f}"
+                    stroke = StrokePath(
+                        points=[start_pt, end_pt],
+                        is_bezier=False,
+                        svg_d=svg_d,
+                        is_hatch=False,
+                    )
+
+                paths.append(stroke)
+
+                # Suppress edge magnitude along the drawn path so it is not re-visited
+                sy = int(round(start_pt[1]))
+                sx = int(round(start_pt[0]))
+                ey = int(round(end_pt[1]))
+                ex = int(round(end_pt[0]))
+
+                rr, cc, _ = skimage.draw.line_aa(sy, sx, ey, ex)
+                valid = (rr >= 0) & (rr < h) & (cc >= 0) & (cc < w)
+                mag[rr[valid], cc[valid]] = 0.0
+                mag[py, px] = 0.0
 
         contour_count = len(paths)
+
+        # 5. Dedicated Artistic Modes
+        artistic_count = 0
+        art_mode = self.params.artistic_mode.lower()
+        if art_mode != "none":
+            update_progress(0.70, f"Kunststil generieren ({art_mode})...")
+            artistic_paths: List[StrokePath] = []
+            if art_mode == "waveform":
+                artistic_paths = generate_waveform(
+                    gray_image=norm_gray,
+                    num_lines=self.params.waveform_lines,
+                    amplitude=self.params.waveform_amplitude,
+                    resolution=self.params.waveform_resolution,
+                    occlusion=self.params.waveform_occlusion,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "spiral":
+                artistic_paths = generate_spiral(
+                    gray_image=norm_gray,
+                    num_loops=self.params.spiral_loops,
+                    resolution=self.params.spiral_resolution,
+                    amplitude=self.params.spiral_amplitude,
+                    frequency=self.params.spiral_frequency,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "tsp":
+                artistic_paths = generate_tsp_art(
+                    gray_image=norm_gray,
+                    num_points=self.params.tsp_points,
+                    two_opt_passes=self.params.tsp_2opt_passes,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "delaunay":
+                artistic_paths = generate_delaunay_art(
+                    gray_image=norm_gray,
+                    grad_magnitude=display_mag,
+                    num_points=self.params.delaunay_points,
+                    edge_weight=self.params.delaunay_edge_weight,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "flowfield":
+                artistic_paths = generate_flowfield(
+                    gray_image=norm_gray,
+                    num_lines=self.params.flowfield_lines,
+                    step_len=self.params.flowfield_step_len,
+                    max_steps=self.params.flowfield_max_steps,
+                    direction=self.params.flowfield_direction,
+                    is_cancelled=is_cancelled,
+                )
+
+            for ap in artistic_paths:
+                ap.is_artistic = True
+                paths.append(ap)
+                artistic_count += 1
         update_progress(0.82, "Schraffur & Schattenlinien prüfen...")
 
         # 5. Hatching for shadows / dark areas if requested
@@ -689,6 +762,7 @@ class PlotEngine:
             contour_strokes=contour_count,
             hatch_strokes=hatch_count,
             shape_strokes=shape_count,
+            artistic_strokes=artistic_count,
             total_length_px=total_drawing_len,
             pen_up_distance_px=pen_up_dist,
             elapsed_time_sec=elapsed,

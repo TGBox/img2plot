@@ -25,6 +25,8 @@ class PlotParameters:
     clahe_clip_limit: float = 0.01
     use_gaussian_blur: bool = True
     gaussian_kernel_size: float = 1.0
+    use_kuwahara: bool = False
+    kuwahara_radius: int = 3  # Quadrant radius for painterly oil-painting smoothing (1 to 10)
 
     # Line tracing & edge detection
     termination_ratio: float = 0.2857  # ~ 1.0 / 3.5
@@ -62,6 +64,36 @@ class PlotParameters:
     shape_size_by_brightness: bool = True    # Helligkeit → Größe (dunkel = groß)
     shape_density_by_brightness: bool = True  # Helligkeit → Dichte (dunkel = mehr Formen)
     shape_ascii_charset: str = "@#S%?*+;:,. "  # Zeichensatz für ASCII-Modus (dunkel → hell)
+
+    # Künstlerische Stile (Artistic Modes)
+    artistic_mode: str = "none"  # "none", "waveform", "spiral", "tsp", "delaunay", "flowfield"
+    artistic_overlay_contours: bool = False  # If True, overlays detected edge contours over the artistic style
+
+    # Waveform / Joy Division Parameters
+    waveform_lines: int = 60
+    waveform_amplitude: float = 20.0
+    waveform_resolution: int = 250
+    waveform_occlusion: bool = True
+
+    # Spiral Art Parameters
+    spiral_loops: int = 60
+    spiral_resolution: int = 350
+    spiral_amplitude: float = 4.0
+    spiral_frequency: float = 30.0
+
+    # TSP Single-Line Art Parameters
+    tsp_points: int = 1200
+    tsp_2opt_passes: int = 15
+
+    # Delaunay / Low-Poly Art Parameters
+    delaunay_points: int = 800
+    delaunay_edge_weight: float = 0.6
+
+    # Flow Field / Streamlines Parameters
+    flowfield_lines: int = 800
+    flowfield_step_len: float = 3.0
+    flowfield_max_steps: int = 40
+    flowfield_direction: str = "tangent"  # "tangent" (contour flow) or "gradient"
 
     # Export & physical page setup
     stroke_color: str = "#1a1a1a"

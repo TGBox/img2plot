@@ -46,6 +46,86 @@ def test_sidebar_parameter_sync(qapp):
     assert abs(read_p.hatching_threshold - 0.42) < 0.05
 
 
+def test_sidebar_artistic_modes_sync(qapp):
+    from img2plot.gui.sidebar import SidebarWidget
+    from img2plot.core.parameters import PlotParameters
+
+    sidebar = SidebarWidget()
+
+    # Test Waveform parameters
+    p_wave = PlotParameters(
+        artistic_mode="waveform",
+        artistic_overlay_contours=True,
+        waveform_lines=75,
+        waveform_amplitude=35.0,
+        waveform_occlusion=False,
+        use_kuwahara=True,
+        kuwahara_radius=5,
+    )
+    sidebar.apply_parameters(p_wave)
+    read_wave = sidebar.get_current_parameters()
+
+    assert read_wave.artistic_mode == "waveform"
+    assert read_wave.artistic_overlay_contours is True
+    assert read_wave.waveform_lines == 75
+    assert abs(read_wave.waveform_amplitude - 35.0) < 0.1
+    assert read_wave.waveform_occlusion is False
+    assert read_wave.use_kuwahara is True
+    assert read_wave.kuwahara_radius == 5
+
+    # Test Spiral parameters
+    p_spiral = PlotParameters(
+        artistic_mode="spiral",
+        spiral_loops=85,
+        spiral_amplitude=7.5,
+        spiral_frequency=45.0,
+    )
+    sidebar.apply_parameters(p_spiral)
+    read_spiral = sidebar.get_current_parameters()
+    assert read_spiral.artistic_mode == "spiral"
+    assert read_spiral.spiral_loops == 85
+    assert abs(read_spiral.spiral_amplitude - 7.5) < 0.1
+    assert abs(read_spiral.spiral_frequency - 45.0) < 0.1
+
+    # Test TSP parameters
+    p_tsp = PlotParameters(
+        artistic_mode="tsp",
+        tsp_points=1500,
+        tsp_2opt_passes=22,
+    )
+    sidebar.apply_parameters(p_tsp)
+    read_tsp = sidebar.get_current_parameters()
+    assert read_tsp.artistic_mode == "tsp"
+    assert read_tsp.tsp_points == 1500
+    assert read_tsp.tsp_2opt_passes == 22
+
+    # Test Delaunay parameters
+    p_delaunay = PlotParameters(
+        artistic_mode="delaunay",
+        delaunay_points=950,
+        delaunay_edge_weight=0.8,
+    )
+    sidebar.apply_parameters(p_delaunay)
+    read_del = sidebar.get_current_parameters()
+    assert read_del.artistic_mode == "delaunay"
+    assert read_del.delaunay_points == 950
+    assert abs(read_del.delaunay_edge_weight - 0.8) < 0.05
+
+    # Test Flowfield parameters
+    p_flow = PlotParameters(
+        artistic_mode="flowfield",
+        flowfield_lines=1100,
+        flowfield_max_steps=55,
+        flowfield_direction="gradient",
+    )
+    sidebar.apply_parameters(p_flow)
+    read_flow = sidebar.get_current_parameters()
+    assert read_flow.artistic_mode == "flowfield"
+    assert read_flow.flowfield_lines == 1100
+    assert read_flow.flowfield_max_steps == 55
+    assert read_flow.flowfield_direction == "gradient"
+
+
 def test_main_window_fullscreen_toggle(qapp):
     from img2plot.gui.main_window import MainWindow
 
