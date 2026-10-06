@@ -230,3 +230,40 @@ def test_preset_save_dialog_and_persistence(qapp, tmp_path, monkeypatch):
     assert all_presets["Mein Super Spiral Preset"].spiral_loops == 88
 
     dlg.close()
+
+
+def test_preset_lab_dynamic_grid_and_card_scaling(qapp):
+    """Test dynamic column layout, card size slider, and AspectImageLabel scaling."""
+    win = PresetLabWindow()
+    win.resize(1600, 900)
+
+    dummy_pixmap = QPixmap(300, 300)
+    dummy_pixmap.fill(Qt.GlobalColor.white)
+
+    # Add 6 cards
+    for i in range(6):
+        win._on_item_ready(i, PlotParameters(artistic_mode="spiral"), dummy_pixmap)
+
+    assert len(win.card_widgets) == 6
+
+    # Test AspectImageLabel
+    card = win.card_widgets[0]
+    assert hasattr(card, "lbl_image")
+    assert card.lbl_image.pixmap() is not None
+    assert not card.lbl_image.pixmap().isNull()
+
+    # Change card size slider
+    assert win.slider_card_size.minimum() == 200
+    assert win.slider_card_size.maximum() == 520
+    win.slider_card_size.setValue(450)
+    assert win.card_target_width == 450
+    assert "450 px" in win.lbl_card_size_val.text()
+
+    # Relayout grid check
+    win._relayout_grid()
+    assert win._current_cols >= 1
+    # Check that column stretch is set
+    for c in range(win._current_cols):
+        assert win.grid_layout.columnStretch(c) == 1
+
+    win.close()

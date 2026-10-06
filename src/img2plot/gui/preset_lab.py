@@ -11,7 +11,7 @@ import os
 import sys
 from typing import List, Optional, Dict, Any
 
-from PySide6.QtCore import Qt, QThread, Signal, QRectF, QSize, QPoint
+from PySide6.QtCore import Qt, QThread, Signal, QRectF, QSize, QPoint, QEvent
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -66,7 +67,7 @@ from .theme import DARK_STYLESHEET
 def render_result_to_pixmap(
     result: EngineResult,
     stroke_color: str = "#18181b",
-    target_size: int = 320,
+    target_size: int = 480,
     bg_color: str = "#ffffff",
 ) -> QPixmap:
     """Render EngineResult vector paths into a crisp anti-aliased thumbnail pixmap."""
@@ -179,7 +180,7 @@ class PresetLabWorker(QThread):
                     break
 
                 color = params.stroke_color if params.stroke_color else "#18181b"
-                pixmap = render_result_to_pixmap(result, stroke_color=color, target_size=320)
+                pixmap = render_result_to_pixmap(result, stroke_color=color, target_size=480)
                 self.sig_item_ready.emit(idx, params, pixmap)
 
             except Exception as e:
@@ -253,6 +254,47 @@ class ZoomModalDialog(QDialog):
 # Card Widget
 # -----------------------------------------------------------------------------
 
+class AspectImageLabel(QLabel):
+    """Responsive image container that smoothly scales master pixmap on resize without layout bloat."""
+
+    sig_clicked = Signal()
+
+    def __init__(self, master_pixmap: QPixmap, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.master_pixmap = master_pixmap
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("background-color: #ffffff; border-radius: 6px;")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(120, 120)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_scaled_pixmap()
+
+    def sizeHint(self) -> QSize:
+        return QSize(240, 220)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.sig_clicked.emit()
+        super().mousePressEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
+
+    def _update_scaled_pixmap(self) -> None:
+        if self.master_pixmap.isNull():
+            return
+        target_w = max(40, self.width() - 8)
+        target_h = max(40, self.height() - 8)
+        scaled = self.master_pixmap.scaled(
+            target_w,
+            target_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+
+
 class PresetCardWidget(QFrame):
     """Gallery card displaying a single randomized result with favorite toggle and zoom."""
 
@@ -273,7 +315,8 @@ class PresetCardWidget(QFrame):
         self.suggested_name = suggested_name
         self.is_favorite = False
 
-        self.setFixedSize(290, 360)
+        self.setMinimumSize(220, 280)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._setup_ui()
         self._update_appearance()
 
@@ -282,17 +325,10 @@ class PresetCardWidget(QFrame):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        # Image container with subtle dark paper border
-        self.lbl_image = QLabel()
-        self.lbl_image.setFixedSize(270, 260)
-        self.lbl_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_image.setStyleSheet("background-color: #ffffff; border-radius: 6px;")
-        self.lbl_image.setPixmap(
-            self.pixmap.scaled(260, 250, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        )
-        self.lbl_image.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lbl_image.mousePressEvent = lambda e: self._on_zoom_clicked()
-        layout.addWidget(self.lbl_image)
+        # Responsive Aspect Image Label
+        self.lbl_image = AspectImageLabel(self.pixmap, parent=self)
+        self.lbl_image.sig_clicked.connect(self._on_zoom_clicked)
+        layout.addWidget(self.lbl_image, 1)
 
         # Meta row: Style badge & zoom button
         meta_row = QHBoxLayout()
@@ -319,7 +355,7 @@ class PresetCardWidget(QFrame):
         self.lbl_name = QLabel(self.suggested_name)
         self.lbl_name.setStyleSheet("font-weight: bold; color: #f4f4f5; font-size: 13px;")
         self.lbl_name.setWordWrap(True)
-        self.lbl_name.setFixedHeight(20)
+        self.lbl_name.setFixedHeight(22)
         layout.addWidget(self.lbl_name)
 
         # Bottom row: Favorite Button
@@ -581,6 +617,8 @@ class PresetLabWindow(QMainWindow):
         self.generated_data: List[Dict[str, Any]] = []
         self.worker: Optional[PresetLabWorker] = None
         self.is_fullscreen: bool = False
+        self.card_target_width: int = 280
+        self._current_cols: int = 4
 
         self._setup_ui()
         self._build_menus()
@@ -744,6 +782,22 @@ class PresetLabWindow(QMainWindow):
         btn_unselect_all.clicked.connect(self.unselect_all_cards)
         sub_bar.addWidget(btn_unselect_all)
 
+        sub_bar.addSpacing(16)
+
+        # Card size zoom slider
+        sub_bar.addWidget(QLabel("<b>Vorschau-Größe:</b>"))
+        self.slider_card_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_card_size.setRange(200, 520)
+        self.slider_card_size.setValue(280)
+        self.slider_card_size.setFixedWidth(120)
+        self.slider_card_size.setToolTip("Größe der Vorschaubilder im Raster stufenlos anpassen (200px – 520px)")
+        self.slider_card_size.valueChanged.connect(self._on_card_size_changed)
+        sub_bar.addWidget(self.slider_card_size)
+
+        self.lbl_card_size_val = QLabel("280 px")
+        self.lbl_card_size_val.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+        sub_bar.addWidget(self.lbl_card_size_val)
+
         sub_bar.addStretch()
 
         self.lbl_fav_counter = QLabel("0 von 0 gemerkt")
@@ -762,9 +816,10 @@ class PresetLabWindow(QMainWindow):
         self.grid_layout = QGridLayout(self.grid_container)
         self.grid_layout.setContentsMargins(14, 14, 14, 14)
         self.grid_layout.setSpacing(14)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.scroll_area.setWidget(self.grid_container)
+        self.scroll_area.viewport().installEventFilter(self)
         root_layout.addWidget(self.scroll_area, 1)
 
         # 5. Bottom Action Bar
@@ -841,6 +896,63 @@ class PresetLabWindow(QMainWindow):
         else:
             self.showNormal()
             self.act_fullscreen.setChecked(False)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._relayout_grid()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout_grid()
+
+    def eventFilter(self, watched, event) -> bool:
+        if hasattr(self, "scroll_area") and watched == self.scroll_area.viewport():
+            if event.type() == QEvent.Type.Resize:
+                self._relayout_grid()
+        return super().eventFilter(watched, event)
+
+    def _on_card_size_changed(self, value: int) -> None:
+        self.card_target_width = value
+        self.lbl_card_size_val.setText(f"{value} px")
+        self._relayout_grid()
+
+    def _relayout_grid(self) -> None:
+        """Dynamically re-arrange cards across columns to fit current viewport width without gaps."""
+        if not hasattr(self, "scroll_area") or not hasattr(self, "grid_layout"):
+            return
+
+        viewport_w = self.scroll_area.viewport().width()
+        if viewport_w <= 100:
+            return
+
+        spacing = self.grid_layout.spacing()
+        margins = self.grid_layout.contentsMargins()
+        effective_w = viewport_w - margins.left() - margins.right() - 20
+
+        card_target_w = getattr(self, "card_target_width", 280)
+        num_cols = max(1, effective_w // (card_target_w + spacing))
+
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            # 1. Clear previous column stretches
+            for c in range(self.grid_layout.columnCount()):
+                self.grid_layout.setColumnStretch(c, 0)
+
+            # 2. Reflow visible cards consecutively without holes
+            visible_cards = [c for c in self.card_widgets if c.isVisible()]
+            for idx, card in enumerate(visible_cards):
+                self.grid_layout.removeWidget(card)
+                r = idx // num_cols
+                c = idx % num_cols
+                self.grid_layout.addWidget(card, r, c)
+
+            # 3. Ensure all columns stretch equally to fill the entire row width
+            for c in range(num_cols):
+                self.grid_layout.setColumnStretch(c, 1)
+
+            self._current_cols = num_cols
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
 
     # -------------------------------------------------------------------------
     # Image Selection & Generation Flow
@@ -926,10 +1038,16 @@ class PresetLabWindow(QMainWindow):
         card.sig_favorite_toggled.connect(self._on_card_favorite_toggled)
         self.card_widgets.append(card)
 
-        # Place into responsive grid (4 cards per row)
-        row = (len(self.card_widgets) - 1) // 4
-        col = (len(self.card_widgets) - 1) % 4
+        # Place into dynamic responsive grid
+        cols = max(1, getattr(self, "_current_cols", 4))
+        visible_idx = len([c for c in self.card_widgets if c.isVisible()]) - 1
+        row = max(0, visible_idx) // cols
+        col = max(0, visible_idx) % cols
         self.grid_layout.addWidget(card, row, col)
+
+        # Ensure active columns stretch to fill viewport width
+        for c in range(cols):
+            self.grid_layout.setColumnStretch(c, 1)
 
         self._update_counter()
 
@@ -937,6 +1055,7 @@ class PresetLabWindow(QMainWindow):
         self.btn_generate.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.lbl_status.setText(f"Fertig! {len(self.card_widgets)} Varianten wurden generiert.")
+        self._relayout_grid()
         self._update_counter()
 
     def _on_worker_error(self, index: int, error_msg: str) -> None:
@@ -960,10 +1079,11 @@ class PresetLabWindow(QMainWindow):
 
     def _on_card_favorite_toggled(self, index: int, is_fav: bool) -> None:
         self._update_counter()
-        if self.btn_filter_favs.isChecked() and not is_fav:
+        if self.btn_filter_favs.isChecked():
             for card in self.card_widgets:
                 if card.index == index:
-                    card.setVisible(False)
+                    card.setVisible(is_fav)
+            self._relayout_grid()
 
     def select_all_cards(self) -> None:
         self.grid_container.setUpdatesEnabled(False)
@@ -992,6 +1112,7 @@ class PresetLabWindow(QMainWindow):
                 card.setVisible(True)
         finally:
             self.grid_container.setUpdatesEnabled(True)
+        self._relayout_grid()
 
     def _filter_favs_clicked(self) -> None:
         self.btn_filter_all.setChecked(False)
@@ -1002,6 +1123,7 @@ class PresetLabWindow(QMainWindow):
                 card.setVisible(card.is_favorite)
         finally:
             self.grid_container.setUpdatesEnabled(True)
+        self._relayout_grid()
 
     def _update_counter(self) -> None:
         fav_count = sum(1 for c in self.card_widgets if c.is_favorite)
