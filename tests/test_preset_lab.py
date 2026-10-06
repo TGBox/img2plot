@@ -47,6 +47,18 @@ def test_generate_random_parameters_forced_mode():
         assert p.artistic_mode == mode
 
 
+def test_generate_random_parameters_artistic_only_and_classic_only():
+    """Verify artistic_only never selects 'none', and classic_only always selects 'none'."""
+    for _ in range(40):
+        p_art = generate_random_parameters(mode="artistic_only")
+        assert p_art.artistic_mode != "none"
+        assert p_art.artistic_mode in ARTISTIC_MODES
+
+    for _ in range(40):
+        p_classic = generate_random_parameters(mode="classic_only")
+        assert p_classic.artistic_mode == "none"
+
+
 def test_suggest_preset_name():
     """Verify intelligent German naming suggestions for various modes."""
     p_spiral = PlotParameters(artistic_mode="spiral")
@@ -130,6 +142,17 @@ def test_preset_lab_window_and_selection(qapp):
     """Test PresetLabWindow gallery selection helpers and fullscreen toggle."""
     win = PresetLabWindow()
     assert win.windowTitle() == "img2plot - Preset-Labor & Stil-Entdecker"
+
+    # Count range up to 1000
+    assert win.slider_count.minimum() == 1
+    assert win.slider_count.maximum() == 1000
+    assert win.spin_count.maximum() == 1000
+
+    # Focus options
+    focus_data_items = [win.combo_focus.itemData(i) for i in range(win.combo_focus.count())]
+    assert "all" in focus_data_items
+    assert "artistic_only" in focus_data_items
+    assert "classic_only" in focus_data_items
 
     # Fullscreen toggle
     assert not win.is_fullscreen

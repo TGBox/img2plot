@@ -56,6 +56,7 @@ from ..core.parameters import PlotParameters
 from ..core.presets import save_user_preset
 from ..core.randomizer import (
     ARTISTIC_MODES,
+    NON_CLASSIC_ARTISTIC_MODES,
     generate_random_parameters,
     suggest_preset_name,
 )
@@ -620,17 +621,17 @@ class PresetLabWindow(QMainWindow):
 
         top_layout.addSpacing(16)
 
-        # Count slider
+        # Count slider (1 to 1000)
         top_layout.addWidget(QLabel("<b>Anzahl Varianten:</b>"))
         self.slider_count = QSlider(Qt.Orientation.Horizontal)
-        self.slider_count.setRange(4, 40)
+        self.slider_count.setRange(1, 1000)
         self.slider_count.setValue(12)
-        self.slider_count.setFixedWidth(130)
+        self.slider_count.setFixedWidth(140)
 
         self.spin_count = QSpinBox()
-        self.spin_count.setRange(4, 40)
+        self.spin_count.setRange(1, 1000)
         self.spin_count.setValue(12)
-        self.spin_count.setFixedWidth(55)
+        self.spin_count.setFixedWidth(65)
 
         self.slider_count.valueChanged.connect(self.spin_count.setValue)
         self.spin_count.valueChanged.connect(self.slider_count.setValue)
@@ -644,8 +645,27 @@ class PresetLabWindow(QMainWindow):
         top_layout.addWidget(QLabel("<b>Stil-Fokus:</b>"))
         self.combo_focus = QComboBox()
         self.combo_focus.addItem("Alle Stile (Bunter Zufallsmix)", "all")
-        for mode in ARTISTIC_MODES:
-            label = mode.replace("_", " ").title() if mode != "none" else "Klassische Kontur"
+        self.combo_focus.addItem("Ausschließlich künstlerische Stile (ohne Kontur)", "artistic_only")
+        self.combo_focus.addItem("Künstlerische Stile gar nicht (nur klassische Kontur & Schraffur)", "classic_only")
+        self.combo_focus.insertSeparator(3)
+
+        mode_display_names = {
+            "waveform": "Wellenform / 3D-Relief",
+            "spiral": "Archimedische Spirale",
+            "tsp": "TSP Single-Line",
+            "delaunay": "Low-Poly (Delaunay)",
+            "flowfield": "Flussfeld (Streamlines)",
+            "voronoi": "Voronoi-Mosaik",
+            "reaction_diffusion": "Reaktions-Diffusion (Turing)",
+            "stippling": "Voronoi Stippling",
+            "sbr": "Stroke-Based Rendering (Pinselstriche)",
+            "isocontours": "Marching Squares (Iso-Höhenlinien)",
+            "physarum": "Physarum (Schleimpilz-Netzwerk)",
+            "string_art": "String-Art (Fadenbild)",
+            "diffgrowth": "Differenzielles Wachstum",
+        }
+        for mode in NON_CLASSIC_ARTISTIC_MODES:
+            label = f"Nur: {mode_display_names.get(mode, mode.title())}"
             self.combo_focus.addItem(label, mode)
         top_layout.addWidget(self.combo_focus)
 
@@ -858,9 +878,8 @@ class PresetLabWindow(QMainWindow):
 
         count = self.slider_count.value()
         focus_mode = self.combo_focus.currentData()
-        target_mode = None if focus_mode == "all" else focus_mode
 
-        param_list = [generate_random_parameters(target_mode) for _ in range(count)]
+        param_list = [generate_random_parameters(focus_mode) for _ in range(count)]
 
         self.btn_generate.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -928,11 +947,15 @@ class PresetLabWindow(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _clear_cards(self) -> None:
-        for card in self.card_widgets:
-            self.grid_layout.removeWidget(card)
-            card.deleteLater()
-        self.card_widgets.clear()
-        self.generated_data.clear()
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            for card in self.card_widgets:
+                self.grid_layout.removeWidget(card)
+                card.deleteLater()
+            self.card_widgets.clear()
+            self.generated_data.clear()
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
         self._update_counter()
 
     def _on_card_favorite_toggled(self, index: int, is_fav: bool) -> None:
@@ -943,26 +966,42 @@ class PresetLabWindow(QMainWindow):
                     card.setVisible(False)
 
     def select_all_cards(self) -> None:
-        for card in self.card_widgets:
-            card.set_favorite(True)
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            for card in self.card_widgets:
+                card.set_favorite(True)
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
         self._update_counter()
 
     def unselect_all_cards(self) -> None:
-        for card in self.card_widgets:
-            card.set_favorite(False)
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            for card in self.card_widgets:
+                card.set_favorite(False)
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
         self._update_counter()
 
     def _filter_all_clicked(self) -> None:
         self.btn_filter_all.setChecked(True)
         self.btn_filter_favs.setChecked(False)
-        for card in self.card_widgets:
-            card.setVisible(True)
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            for card in self.card_widgets:
+                card.setVisible(True)
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
 
     def _filter_favs_clicked(self) -> None:
         self.btn_filter_all.setChecked(False)
         self.btn_filter_favs.setChecked(True)
-        for card in self.card_widgets:
-            card.setVisible(card.is_favorite)
+        self.grid_container.setUpdatesEnabled(False)
+        try:
+            for card in self.card_widgets:
+                card.setVisible(card.is_favorite)
+        finally:
+            self.grid_container.setUpdatesEnabled(True)
 
     def _update_counter(self) -> None:
         fav_count = sum(1 for c in self.card_widgets if c.is_favorite)

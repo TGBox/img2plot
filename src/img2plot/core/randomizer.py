@@ -27,6 +27,8 @@ ARTISTIC_MODES: List[str] = [
     "diffgrowth",
 ]
 
+NON_CLASSIC_ARTISTIC_MODES: List[str] = [m for m in ARTISTIC_MODES if m != "none"]
+
 INK_PALETTE: List[str] = [
     "#1a1a1a",  # Tiefschwarz / Deep Charcoal
     "#1e3a8a",  # Blueprint Marineblau
@@ -44,9 +46,16 @@ INK_PALETTE: List[str] = [
 def generate_random_parameters(mode: Optional[str] = None) -> PlotParameters:
     """
     Generate a balanced, random, aesthetically viable PlotParameters instance.
-    If mode is specified, uses that artistic mode; otherwise picks randomly across all modes.
+    - If mode == "classic_only" or "none": forces artistic_mode="none" (no artistic mode, only classic contours/hatching/shapes).
+    - If mode == "artistic_only": samples exclusively from artistic modes (waveform, spiral, tsp, etc.), never "none".
+    - If mode is in ARTISTIC_MODES: uses that exact artistic mode.
+    - Otherwise (mode is None or "all"): picks randomly across all modes.
     """
-    if mode and mode in ARTISTIC_MODES:
+    if mode in ("none", "classic_only"):
+        chosen_mode = "none"
+    elif mode == "artistic_only":
+        chosen_mode = random.choice(NON_CLASSIC_ARTISTIC_MODES)
+    elif mode and mode in ARTISTIC_MODES:
         chosen_mode = mode
     else:
         chosen_mode = random.choice(ARTISTIC_MODES)
