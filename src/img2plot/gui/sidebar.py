@@ -488,7 +488,15 @@ class SidebarWidget(QWidget):
 
         # 1. Filter badge
         has_kuwahara = hasattr(self, "chk_kuwahara") and self.chk_kuwahara.isChecked()
-        if has_kuwahara:
+        has_quadtree = hasattr(self, "chk_quadtree") and self.chk_quadtree.isChecked()
+        has_pixel_sort = hasattr(self, "chk_pixel_sort") and self.chk_pixel_sort.isChecked()
+        if has_quadtree and has_pixel_sort:
+            self.acc_filter.set_badge("• Quadtree + Glitch", active=True)
+        elif has_quadtree:
+            self.acc_filter.set_badge("• Quadtree aktiv", active=True)
+        elif has_pixel_sort:
+            self.acc_filter.set_badge("• Pixel-Sort aktiv", active=True)
+        elif has_kuwahara:
             r = int(self.slider_kuwahara_r.get_value()) if hasattr(self, "slider_kuwahara_r") else 3
             self.acc_filter.set_badge(f"• Kuwahara (R={r})", active=True)
         else:
@@ -497,7 +505,18 @@ class SidebarWidget(QWidget):
         # 2. Artistic badge
         if hasattr(self, "combo_artistic_mode"):
             idx = self.combo_artistic_mode.currentIndex()
-            mode_names = ["Keiner", "• Wellenform", "• Spirale", "• TSP-Linie", "• Low-Poly", "• Flussfeld"]
+            mode_names = [
+                "Keiner",
+                "• Wellenform",
+                "• Spirale",
+                "• TSP-Linie",
+                "• Low-Poly",
+                "• Flussfeld",
+                "• Voronoi",
+                "• Turing-Muster",
+                "• Stippling",
+                "• SBR-Pinsel",
+            ]
             if 0 < idx < len(mode_names):
                 self.acc_artistic.set_badge(mode_names[idx], active=True)
             else:
@@ -719,6 +738,96 @@ class SidebarWidget(QWidget):
         self.slider_kuwahara_r.setVisible(False)
         layout.addWidget(self.slider_kuwahara_r)
 
+        # Quadtree decomposition filter
+        self.chk_quadtree = QCheckBox("Quadtree-Dekomposition (Block-Abstraktion)")
+        self.chk_quadtree.setChecked(False)
+        self.chk_quadtree.setToolTip("Zerlegt das Bild rekursiv in 4 Quadranten nach Helligkeitsvarianz.")
+        self.chk_quadtree.stateChanged.connect(self._on_filter_toggled)
+        layout.addWidget(self.chk_quadtree)
+
+        self.slider_quadtree_thresh = SliderRow(
+            title="Quadtree Varianz-Schwelle:",
+            min_val=0.01,
+            max_val=0.25,
+            default_val=0.06,
+            step=0.01,
+            decimals=2,
+            tooltip="Schwellenwert zur Blockunterteilung (höher = gröbere Blöcke).",
+        )
+        self.slider_quadtree_thresh.sig_value_changed.connect(self._emit_param_change)
+        self.slider_quadtree_thresh.setVisible(False)
+        layout.addWidget(self.slider_quadtree_thresh)
+
+        self.slider_quadtree_min_size = SliderRow(
+            title="Min. Blockgröße:",
+            min_val=2,
+            max_val=48,
+            default_val=8,
+            step=2,
+            suffix="px",
+            tooltip="Minimale Kantenlänge der Blöcke in Pixeln.",
+        )
+        self.slider_quadtree_min_size.sig_value_changed.connect(self._emit_param_change)
+        self.slider_quadtree_min_size.setVisible(False)
+        layout.addWidget(self.slider_quadtree_min_size)
+
+        self.chk_quadtree_render_boxes = QCheckBox("Quadtree-Gitterboxen als Vektorlinien plotten")
+        self.chk_quadtree_render_boxes.setChecked(False)
+        self.chk_quadtree_render_boxes.setToolTip("Zeichnet die Rechteck-Gitterlinien der Quadtree-Blöcke direkt als Striche.")
+        self.chk_quadtree_render_boxes.stateChanged.connect(self._emit_param_change)
+        self.chk_quadtree_render_boxes.setVisible(False)
+        layout.addWidget(self.chk_quadtree_render_boxes)
+
+        # Pixel Sorting filter
+        self.chk_pixel_sort = QCheckBox("Pixel-Sorting (Glitch-Art)")
+        self.chk_pixel_sort.setChecked(False)
+        self.chk_pixel_sort.setToolTip("Sortiert Bildzeilen oder -spalten in Helligkeitsintervallen für Glitch-Art-Streifen.")
+        self.chk_pixel_sort.stateChanged.connect(self._on_filter_toggled)
+        layout.addWidget(self.chk_pixel_sort)
+
+        self.widget_pixel_sort_opts = QWidget()
+        ps_layout = QVBoxLayout(self.widget_pixel_sort_opts)
+        ps_layout.setContentsMargins(0, 0, 0, 0)
+        ps_layout.setSpacing(4)
+
+        ps_layout.addWidget(QLabel("Sortierrichtung:"))
+        self.combo_pixel_sort_dir = QComboBox()
+        self.combo_pixel_sort_dir.addItems(["Horizontal (Zeilen)", "Vertikal (Spalten)"])
+        self.combo_pixel_sort_dir.currentIndexChanged.connect(self._emit_param_change)
+        ps_layout.addWidget(self.combo_pixel_sort_dir)
+
+        self.slider_pixel_sort_lower = SliderRow(
+            title="Untere Helligkeitsschwelle:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.25,
+            step=0.05,
+            decimals=2,
+            tooltip="Minimale Helligkeit für sortierbare Intervalle.",
+        )
+        self.slider_pixel_sort_lower.sig_value_changed.connect(self._emit_param_change)
+        ps_layout.addWidget(self.slider_pixel_sort_lower)
+
+        self.slider_pixel_sort_upper = SliderRow(
+            title="Obere Helligkeitsschwelle:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.80,
+            step=0.05,
+            decimals=2,
+            tooltip="Maximale Helligkeit für sortierbare Intervalle.",
+        )
+        self.slider_pixel_sort_upper.sig_value_changed.connect(self._emit_param_change)
+        ps_layout.addWidget(self.slider_pixel_sort_upper)
+
+        self.chk_pixel_sort_rev = QCheckBox("Sortierung umkehren (absteigend)")
+        self.chk_pixel_sort_rev.setChecked(False)
+        self.chk_pixel_sort_rev.stateChanged.connect(self._emit_param_change)
+        ps_layout.addWidget(self.chk_pixel_sort_rev)
+
+        self.widget_pixel_sort_opts.setVisible(False)
+        layout.addWidget(self.widget_pixel_sort_opts)
+
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
@@ -732,6 +841,13 @@ class SidebarWidget(QWidget):
             self.slider_blur_sigma.setVisible(self.chk_blur.isChecked())
         if hasattr(self, "slider_kuwahara_r"):
             self.slider_kuwahara_r.setVisible(self.chk_kuwahara.isChecked())
+        if hasattr(self, "chk_quadtree"):
+            is_qt = self.chk_quadtree.isChecked()
+            self.slider_quadtree_thresh.setVisible(is_qt)
+            self.slider_quadtree_min_size.setVisible(is_qt)
+            self.chk_quadtree_render_boxes.setVisible(is_qt)
+        if hasattr(self, "chk_pixel_sort"):
+            self.widget_pixel_sort_opts.setVisible(self.chk_pixel_sort.isChecked())
         self._emit_param_change()
 
     def _build_line_detection_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
@@ -843,7 +959,18 @@ class SidebarWidget(QWidget):
         elif hasattr(self, "layout_content"):
             self.layout_content.addWidget(box)
 
-    _ARTISTIC_MODE_VALUES = ["none", "waveform", "spiral", "tsp", "delaunay", "flowfield"]
+    _ARTISTIC_MODE_VALUES = [
+        "none",
+        "waveform",
+        "spiral",
+        "tsp",
+        "delaunay",
+        "flowfield",
+        "voronoi",
+        "reaction_diffusion",
+        "stippling",
+        "sbr",
+    ]
 
     def _build_artistic_modes_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
         """Build the non-AI artistic styles control section."""
@@ -860,6 +987,10 @@ class SidebarWidget(QWidget):
             "TSP Single-Line (Handlungsreisender)",
             "Low-Poly (Delaunay-Mosaik)",
             "Flussfeld (Van-Gogh-Streamlines)",
+            "Voronoi-Mosaik (Zell-Polygone)",
+            "Reaktions-Diffusion (Turing-Muster)",
+            "Voronoi Stippling (Lloyd-Relaxation)",
+            "Stroke-Based Rendering (Bézier-Pinselstriche)",
         ])
         self.combo_artistic_mode.currentIndexChanged.connect(self._on_artistic_mode_changed)
         layout.addWidget(self.combo_artistic_mode)
@@ -1047,6 +1178,213 @@ class SidebarWidget(QWidget):
         f_layout.addWidget(self.combo_flow_dir)
         layout.addWidget(self.widget_flow_opts)
 
+        # --- Voronoi Mosaic controls ---
+        self.widget_voronoi_opts = QWidget()
+        vo_layout = QVBoxLayout(self.widget_voronoi_opts)
+        vo_layout.setContentsMargins(0, 0, 0, 0)
+        vo_layout.setSpacing(4)
+
+        self.slider_voronoi_points = SliderRow(
+            title="Voronoi-Zellenanzahl:",
+            min_val=100,
+            max_val=4000,
+            default_val=1200,
+            step=50,
+            tooltip="Anzahl der Voronoi-Zellkeime.",
+        )
+        self.slider_voronoi_points.sig_value_changed.connect(self._emit_param_change)
+        vo_layout.addWidget(self.slider_voronoi_points)
+
+        self.slider_voronoi_weight = SliderRow(
+            title="Kanten-Gewichtung:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.60,
+            step=0.05,
+            decimals=2,
+            tooltip="0.0 = Reine Schattenbetonung, 1.0 = Reine Kantenbetonung.",
+        )
+        self.slider_voronoi_weight.sig_value_changed.connect(self._emit_param_change)
+        vo_layout.addWidget(self.slider_voronoi_weight)
+        layout.addWidget(self.widget_voronoi_opts)
+
+        # --- Reaction-Diffusion (Turing) controls ---
+        self.widget_rd_opts = QWidget()
+        rd_layout = QVBoxLayout(self.widget_rd_opts)
+        rd_layout.setContentsMargins(0, 0, 0, 0)
+        rd_layout.setSpacing(4)
+
+        self.slider_rd_res = SliderRow(
+            title="Simulations-Auflösung:",
+            min_val=80,
+            max_val=320,
+            default_val=180,
+            step=10,
+            tooltip="Gittergröße für die Diffusionssimulation (höher = feinere Muster).",
+        )
+        self.slider_rd_res.sig_value_changed.connect(self._emit_param_change)
+        rd_layout.addWidget(self.slider_rd_res)
+
+        self.slider_rd_iter = SliderRow(
+            title="Simulations-Schritte:",
+            min_val=50,
+            max_val=500,
+            default_val=240,
+            step=10,
+            tooltip="Anzahl der Zeitschritte für das Gray-Scott-Modell.",
+        )
+        self.slider_rd_iter.sig_value_changed.connect(self._emit_param_change)
+        rd_layout.addWidget(self.slider_rd_iter)
+
+        self.slider_rd_feed = SliderRow(
+            title="Feed-Rate (F):",
+            min_val=0.015,
+            max_val=0.065,
+            default_val=0.037,
+            step=0.002,
+            decimals=3,
+            tooltip="Chemische Zufuhrrate (steuert Flecken vs. Streifen).",
+        )
+        self.slider_rd_feed.sig_value_changed.connect(self._emit_param_change)
+        rd_layout.addWidget(self.slider_rd_feed)
+
+        self.slider_rd_kill = SliderRow(
+            title="Kill-Rate (k):",
+            min_val=0.045,
+            max_val=0.070,
+            default_val=0.060,
+            step=0.001,
+            decimals=3,
+            tooltip="Chemische Abbaurate.",
+        )
+        self.slider_rd_kill.sig_value_changed.connect(self._emit_param_change)
+        rd_layout.addWidget(self.slider_rd_kill)
+
+        self.slider_rd_level = SliderRow(
+            title="Isolinien-Schwelle:",
+            min_val=0.10,
+            max_val=0.50,
+            default_val=0.28,
+            step=0.02,
+            decimals=2,
+            tooltip="Schwellenwert zur Konturextraktion der chemischen Wellen.",
+        )
+        self.slider_rd_level.sig_value_changed.connect(self._emit_param_change)
+        rd_layout.addWidget(self.slider_rd_level)
+        layout.addWidget(self.widget_rd_opts)
+
+        # --- Voronoi Stippling controls ---
+        self.widget_stippling_opts = QWidget()
+        st_layout = QVBoxLayout(self.widget_stippling_opts)
+        st_layout.setContentsMargins(0, 0, 0, 0)
+        st_layout.setSpacing(4)
+
+        self.slider_stippling_points = SliderRow(
+            title="Stipple-Punkte:",
+            min_val=200,
+            max_val=5000,
+            default_val=1500,
+            step=50,
+            tooltip="Gesamtzahl der Punkte im Stippling.",
+        )
+        self.slider_stippling_points.sig_value_changed.connect(self._emit_param_change)
+        st_layout.addWidget(self.slider_stippling_points)
+
+        self.slider_stippling_passes = SliderRow(
+            title="Lloyd-Relaxationsrunden:",
+            min_val=1,
+            max_val=15,
+            default_val=6,
+            step=1,
+            tooltip="Iterationen zur harmonischen Punktverteilung (Centroidal Voronoi).",
+        )
+        self.slider_stippling_passes.sig_value_changed.connect(self._emit_param_change)
+        st_layout.addWidget(self.slider_stippling_passes)
+
+        self.slider_stippling_min_r = SliderRow(
+            title="Min. Punktradius:",
+            min_val=0.2,
+            max_val=3.0,
+            default_val=0.8,
+            step=0.1,
+            decimals=1,
+            suffix="px",
+            tooltip="Radius in hellen Bereichen.",
+        )
+        self.slider_stippling_min_r.sig_value_changed.connect(self._emit_param_change)
+        st_layout.addWidget(self.slider_stippling_min_r)
+
+        self.slider_stippling_max_r = SliderRow(
+            title="Max. Punktradius:",
+            min_val=1.0,
+            max_val=6.0,
+            default_val=3.0,
+            step=0.2,
+            decimals=1,
+            suffix="px",
+            tooltip="Radius in dunklen Schattenbereichen.",
+        )
+        self.slider_stippling_max_r.sig_value_changed.connect(self._emit_param_change)
+        st_layout.addWidget(self.slider_stippling_max_r)
+
+        self.chk_stippling_size_dark = QCheckBox("Punktgröße an Bildhelligkeit anpassen")
+        self.chk_stippling_size_dark.setChecked(True)
+        self.chk_stippling_size_dark.stateChanged.connect(self._emit_param_change)
+        st_layout.addWidget(self.chk_stippling_size_dark)
+        layout.addWidget(self.widget_stippling_opts)
+
+        # --- Stroke-Based Rendering (SBR) controls ---
+        self.widget_sbr_opts = QWidget()
+        sbr_layout = QVBoxLayout(self.widget_sbr_opts)
+        sbr_layout.setContentsMargins(0, 0, 0, 0)
+        sbr_layout.setSpacing(4)
+
+        self.slider_sbr_strokes = SliderRow(
+            title="Pinselstrich-Anzahl:",
+            min_val=200,
+            max_val=6000,
+            default_val=1500,
+            step=50,
+            tooltip="Anzahl parametrischer Bézier-Pinselstriche.",
+        )
+        self.slider_sbr_strokes.sig_value_changed.connect(self._emit_param_change)
+        sbr_layout.addWidget(self.slider_sbr_strokes)
+
+        self.slider_sbr_length = SliderRow(
+            title="Strichlänge (Basis):",
+            min_val=5.0,
+            max_val=40.0,
+            default_val=16.0,
+            step=1.0,
+            decimals=1,
+            suffix="px",
+            tooltip="Durchschnittliche Länge der Pinselstriche.",
+        )
+        self.slider_sbr_length.sig_value_changed.connect(self._emit_param_change)
+        sbr_layout.addWidget(self.slider_sbr_length)
+
+        self.slider_sbr_curv = SliderRow(
+            title="Biegung / Kantenfluss:",
+            min_val=0.0,
+            max_val=1.0,
+            default_val=0.65,
+            step=0.05,
+            decimals=2,
+            tooltip="Wie stark Striche dem Richtungsfeld der Konturen folgen.",
+        )
+        self.slider_sbr_curv.sig_value_changed.connect(self._emit_param_change)
+        sbr_layout.addWidget(self.slider_sbr_curv)
+
+        sbr_layout.addWidget(QLabel("Strich-Ausrichtung:"))
+        self.combo_sbr_align = QComboBox()
+        self.combo_sbr_align.addItems([
+            "Tangente (Kantenfluss / Gravur)",
+            "Kreuzend (Schraffur / Querfluss)",
+        ])
+        self.combo_sbr_align.currentIndexChanged.connect(self._emit_param_change)
+        sbr_layout.addWidget(self.combo_sbr_align)
+        layout.addWidget(self.widget_sbr_opts)
+
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
@@ -1060,6 +1398,10 @@ class SidebarWidget(QWidget):
         self.widget_tsp_opts.setVisible(idx == 3)
         self.widget_delaunay_opts.setVisible(idx == 4)
         self.widget_flow_opts.setVisible(idx == 5)
+        self.widget_voronoi_opts.setVisible(idx == 6)
+        self.widget_rd_opts.setVisible(idx == 7)
+        self.widget_stippling_opts.setVisible(idx == 8)
+        self.widget_sbr_opts.setVisible(idx == 9)
         self.chk_artistic_overlay.setVisible(idx > 0)
         self._emit_param_change()
 
@@ -1554,6 +1896,20 @@ class SidebarWidget(QWidget):
         p.use_kuwahara = self.chk_kuwahara.isChecked()
         p.kuwahara_radius = int(self.slider_kuwahara_r.get_value())
 
+        # Preprocessing filter: Quadtree & Pixel Sorting
+        if hasattr(self, "chk_quadtree"):
+            p.use_quadtree = self.chk_quadtree.isChecked()
+            p.quadtree_threshold = self.slider_quadtree_thresh.get_value()
+            p.quadtree_min_size = int(self.slider_quadtree_min_size.get_value())
+            p.quadtree_render_boxes = self.chk_quadtree_render_boxes.isChecked()
+
+        if hasattr(self, "chk_pixel_sort"):
+            p.use_pixel_sort = self.chk_pixel_sort.isChecked()
+            p.pixel_sort_direction = "horizontal" if self.combo_pixel_sort_dir.currentIndex() == 0 else "vertical"
+            p.pixel_sort_lower_thresh = self.slider_pixel_sort_lower.get_value()
+            p.pixel_sort_upper_thresh = self.slider_pixel_sort_upper.get_value()
+            p.pixel_sort_reverse = self.chk_pixel_sort_rev.isChecked()
+
         # Artistic mode
         a_idx = self.combo_artistic_mode.currentIndex()
         p.artistic_mode = self._ARTISTIC_MODE_VALUES[a_idx] if 0 <= a_idx < len(self._ARTISTIC_MODE_VALUES) else "none"
@@ -1571,6 +1927,30 @@ class SidebarWidget(QWidget):
         p.flowfield_lines = int(self.slider_flow_lines.get_value())
         p.flowfield_max_steps = int(self.slider_flow_steps.get_value())
         p.flowfield_direction = "tangent" if self.combo_flow_dir.currentIndex() == 0 else "gradient"
+
+        if hasattr(self, "slider_voronoi_points"):
+            p.voronoi_points = int(self.slider_voronoi_points.get_value())
+            p.voronoi_edge_weight = self.slider_voronoi_weight.get_value()
+
+        if hasattr(self, "slider_rd_res"):
+            p.rd_sim_resolution = int(self.slider_rd_res.get_value())
+            p.rd_iterations = int(self.slider_rd_iter.get_value())
+            p.rd_feed_rate = self.slider_rd_feed.get_value()
+            p.rd_kill_rate = self.slider_rd_kill.get_value()
+            p.rd_contour_level = self.slider_rd_level.get_value()
+
+        if hasattr(self, "slider_stippling_points"):
+            p.stippling_points = int(self.slider_stippling_points.get_value())
+            p.stippling_lloyd_passes = int(self.slider_stippling_passes.get_value())
+            p.stippling_min_radius = self.slider_stippling_min_r.get_value()
+            p.stippling_max_radius = self.slider_stippling_max_r.get_value()
+            p.stippling_size_by_darkness = self.chk_stippling_size_dark.isChecked()
+
+        if hasattr(self, "slider_sbr_strokes"):
+            p.sbr_strokes = int(self.slider_sbr_strokes.get_value())
+            p.sbr_length = self.slider_sbr_length.get_value()
+            p.sbr_curvature = self.slider_sbr_curv.get_value()
+            p.sbr_align_mode = "tangent" if self.combo_sbr_align.currentIndex() == 0 else "cross"
 
         p.termination_ratio = self.slider_term_ratio.get_value()
         p.line_continue_thresh = self.slider_continue_thresh.get_value()
@@ -1632,6 +2012,19 @@ class SidebarWidget(QWidget):
         self.chk_kuwahara.setChecked(p.use_kuwahara)
         self.slider_kuwahara_r.set_value(p.kuwahara_radius)
 
+        if hasattr(self, "chk_quadtree"):
+            self.chk_quadtree.setChecked(p.use_quadtree)
+            self.slider_quadtree_thresh.set_value(p.quadtree_threshold)
+            self.slider_quadtree_min_size.set_value(p.quadtree_min_size)
+            self.chk_quadtree_render_boxes.setChecked(p.quadtree_render_boxes)
+
+        if hasattr(self, "chk_pixel_sort"):
+            self.chk_pixel_sort.setChecked(p.use_pixel_sort)
+            self.combo_pixel_sort_dir.setCurrentIndex(0 if p.pixel_sort_direction == "horizontal" else 1)
+            self.slider_pixel_sort_lower.set_value(p.pixel_sort_lower_thresh)
+            self.slider_pixel_sort_upper.set_value(p.pixel_sort_upper_thresh)
+            self.chk_pixel_sort_rev.setChecked(p.pixel_sort_reverse)
+
         # Artistic mode
         try:
             art_idx = self._ARTISTIC_MODE_VALUES.index(p.artistic_mode.lower())
@@ -1652,6 +2045,31 @@ class SidebarWidget(QWidget):
         self.slider_flow_lines.set_value(p.flowfield_lines)
         self.slider_flow_steps.set_value(p.flowfield_max_steps)
         self.combo_flow_dir.setCurrentIndex(0 if p.flowfield_direction == "tangent" else 1)
+
+        if hasattr(self, "slider_voronoi_points"):
+            self.slider_voronoi_points.set_value(p.voronoi_points)
+            self.slider_voronoi_weight.set_value(p.voronoi_edge_weight)
+
+        if hasattr(self, "slider_rd_res"):
+            self.slider_rd_res.set_value(p.rd_sim_resolution)
+            self.slider_rd_iter.set_value(p.rd_iterations)
+            self.slider_rd_feed.set_value(p.rd_feed_rate)
+            self.slider_rd_kill.set_value(p.rd_kill_rate)
+            self.slider_rd_level.set_value(p.rd_contour_level)
+
+        if hasattr(self, "slider_stippling_points"):
+            self.slider_stippling_points.set_value(p.stippling_points)
+            self.slider_stippling_passes.set_value(p.stippling_lloyd_passes)
+            self.slider_stippling_min_r.set_value(p.stippling_min_radius)
+            self.slider_stippling_max_r.set_value(p.stippling_max_radius)
+            self.chk_stippling_size_dark.setChecked(p.stippling_size_by_darkness)
+
+        if hasattr(self, "slider_sbr_strokes"):
+            self.slider_sbr_strokes.set_value(p.sbr_strokes)
+            self.slider_sbr_length.set_value(p.sbr_length)
+            self.slider_sbr_curv.set_value(p.sbr_curvature)
+            self.combo_sbr_align.setCurrentIndex(0 if p.sbr_align_mode == "tangent" else 1)
+
         self._on_artistic_mode_changed(art_idx)
 
         self.slider_term_ratio.set_value(p.termination_ratio)

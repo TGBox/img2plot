@@ -222,9 +222,9 @@ class MainWindow(QMainWindow):
     def _load_default_sample_if_available(self) -> None:
         """Auto-load a sample image from readme-imgs if present."""
         sample_candidates = [
-            os.path.join("readme-imgs", "betta.jpg"),
-            os.path.join("readme-imgs", "revali.jpg"),
-            os.path.join("readme-imgs", "dunwall.jpg"),
+            os.path.join("readme-imgs", "shroom.png"),
+            os.path.join("readme-imgs", "dragon.png"),
+            os.path.join("readme-imgs", "planet.png"),
         ]
         for candidate in sample_candidates:
             if os.path.isfile(candidate):

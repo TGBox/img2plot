@@ -24,6 +24,12 @@ from .spiral import generate_spiral
 from .tsp_art import generate_tsp_art
 from .delaunay_art import generate_delaunay_art
 from .flowfield import generate_flowfield
+from .quadtree import apply_quadtree_decomposition
+from .pixel_sort import apply_pixel_sort
+from .voronoi_art import generate_voronoi_art
+from .reaction_diffusion import generate_reaction_diffusion
+from .voronoi_stippling import generate_voronoi_stippling
+from .sbr import generate_sbr_art
 
 Point2D = Tuple[float, float]
 
@@ -494,6 +500,16 @@ class PlotEngine:
             self.params.gaussian_kernel_size,
             self.params.use_kuwahara,
             self.params.kuwahara_radius,
+            self.params.use_quadtree,
+            self.params.quadtree_threshold,
+            self.params.quadtree_min_size,
+            self.params.quadtree_max_depth,
+            self.params.quadtree_render_boxes,
+            self.params.use_pixel_sort,
+            self.params.pixel_sort_direction,
+            self.params.pixel_sort_lower_thresh,
+            self.params.pixel_sort_upper_thresh,
+            self.params.pixel_sort_reverse,
         )
 
         if filter_cache_key in _PREPROCESS_CACHE:
@@ -503,6 +519,7 @@ class PlotEngine:
             display_mag = cached["display_mag"]
             grad_x = cached["grad_x"]
             grad_y = cached["grad_y"]
+            quadtree_boxes = cached.get("quadtree_boxes", [])
         else:
             # Convert to RGB then grayscale float array in [0.0, 1.0]
             rgb = np.array(img_pil.convert("RGB"), dtype=np.float32)
@@ -518,7 +535,30 @@ class PlotEngine:
             if self.params.use_kuwahara and self.params.kuwahara_radius >= 1:
                 norm_gray = apply_kuwahara(norm_gray, radius=self.params.kuwahara_radius)
 
-            # 3. Preprocessing: CLAHE
+            # 3. Preprocessing: Pixel Sorting (Glitch-Art)
+            if self.params.use_pixel_sort:
+                norm_gray = apply_pixel_sort(
+                    norm_gray,
+                    direction=self.params.pixel_sort_direction,
+                    lower_threshold=self.params.pixel_sort_lower_thresh,
+                    upper_threshold=self.params.pixel_sort_upper_thresh,
+                    reverse=self.params.pixel_sort_reverse,
+                    is_cancelled=is_cancelled,
+                )
+
+            # 4. Preprocessing: Quadtree Decomposition (Block-Abstraktion)
+            quadtree_boxes: List[StrokePath] = []
+            if self.params.use_quadtree:
+                norm_gray, quadtree_boxes = apply_quadtree_decomposition(
+                    norm_gray,
+                    variance_threshold=self.params.quadtree_threshold,
+                    min_size=self.params.quadtree_min_size,
+                    max_depth=self.params.quadtree_max_depth,
+                    render_boxes=self.params.quadtree_render_boxes,
+                    is_cancelled=is_cancelled,
+                )
+
+            # 5. Preprocessing: CLAHE
             if self.params.use_clahe:
                 norm_gray = skimage.exposure.equalize_adapthist(
                     norm_gray,
@@ -526,7 +566,7 @@ class PlotEngine:
                     clip_limit=self.params.clahe_clip_limit,
                 )
 
-            # 4. Preprocessing: Gaussian Blur
+            # 6. Preprocessing: Gaussian Blur
             if self.params.use_gaussian_blur and self.params.gaussian_kernel_size > 0:
                 norm_gray = scipy.ndimage.gaussian_filter(
                     norm_gray, sigma=self.params.gaussian_kernel_size
@@ -534,7 +574,7 @@ class PlotEngine:
 
             update_progress(0.25, "Kanten und Gradienten berechnen...")
 
-            # 4. Sobel & Gradient extraction
+            # 7. Sobel & Gradient extraction
             sobel_dx = scipy.ndimage.sobel(norm_gray, axis=1)
             sobel_dy = scipy.ndimage.sobel(norm_gray, axis=0)
             mag = np.hypot(sobel_dx, sobel_dy)
@@ -562,6 +602,7 @@ class PlotEngine:
                 "display_mag": display_mag,
                 "grad_x": grad_x,
                 "grad_y": grad_y,
+                "quadtree_boxes": quadtree_boxes,
             }
 
         update_progress(0.35, "Linien werden extrahiert...")
@@ -655,6 +696,11 @@ class PlotEngine:
 
         contour_count = len(paths)
 
+        # Include Quadtree box strokes if requested
+        if self.params.use_quadtree and self.params.quadtree_render_boxes and quadtree_boxes:
+            for qb in quadtree_boxes:
+                paths.append(qb)
+
         # 5. Dedicated Artistic Modes
         artistic_count = 0
         art_mode = self.params.artistic_mode.lower()
@@ -701,6 +747,44 @@ class PlotEngine:
                     step_len=self.params.flowfield_step_len,
                     max_steps=self.params.flowfield_max_steps,
                     direction=self.params.flowfield_direction,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "voronoi":
+                artistic_paths = generate_voronoi_art(
+                    gray_image=norm_gray,
+                    grad_magnitude=display_mag,
+                    num_points=self.params.voronoi_points,
+                    edge_weight=self.params.voronoi_edge_weight,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "reaction_diffusion":
+                artistic_paths = generate_reaction_diffusion(
+                    gray_image=norm_gray,
+                    sim_resolution=self.params.rd_sim_resolution,
+                    iterations=self.params.rd_iterations,
+                    feed_rate=self.params.rd_feed_rate,
+                    kill_rate=self.params.rd_kill_rate,
+                    contour_level=self.params.rd_contour_level,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "stippling":
+                artistic_paths = generate_voronoi_stippling(
+                    gray_image=norm_gray,
+                    num_points=self.params.stippling_points,
+                    lloyd_iterations=self.params.stippling_lloyd_passes,
+                    min_radius=self.params.stippling_min_radius,
+                    max_radius=self.params.stippling_max_radius,
+                    size_by_darkness=self.params.stippling_size_by_darkness,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "sbr":
+                artistic_paths = generate_sbr_art(
+                    gray_image=norm_gray,
+                    num_strokes=self.params.sbr_strokes,
+                    stroke_length=self.params.sbr_length,
+                    curvature=self.params.sbr_curvature,
+                    step_size=2.0,
+                    align_mode=self.params.sbr_align_mode,
                     is_cancelled=is_cancelled,
                 )
 

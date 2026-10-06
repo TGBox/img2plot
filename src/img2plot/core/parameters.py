@@ -28,6 +28,19 @@ class PlotParameters:
     use_kuwahara: bool = False
     kuwahara_radius: int = 3  # Quadrant radius for painterly oil-painting smoothing (1 to 10)
 
+    # Preprocessing Filters: Quadtree & Pixel Sorting
+    use_quadtree: bool = False
+    quadtree_threshold: float = 0.06  # Variance threshold for splitting (0.01 to 0.25)
+    quadtree_min_size: int = 8  # Minimum block size in pixels (2 to 64)
+    quadtree_max_depth: int = 7  # Maximum recursion depth (2 to 10)
+    quadtree_render_boxes: bool = False  # Render quadtree block borders as vector strokes
+
+    use_pixel_sort: bool = False
+    pixel_sort_direction: str = "horizontal"  # "horizontal" or "vertical"
+    pixel_sort_lower_thresh: float = 0.25  # Minimum brightness threshold (0.0 to 1.0)
+    pixel_sort_upper_thresh: float = 0.80  # Maximum brightness threshold (0.0 to 1.0)
+    pixel_sort_reverse: bool = False  # Reverse sort order (descending instead of ascending)
+
     # Line tracing & edge detection
     termination_ratio: float = 0.2857  # ~ 1.0 / 3.5
     line_continue_thresh: float = 0.01
@@ -66,7 +79,7 @@ class PlotParameters:
     shape_ascii_charset: str = "@#S%?*+;:,. "  # Zeichensatz für ASCII-Modus (dunkel → hell)
 
     # Künstlerische Stile (Artistic Modes)
-    artistic_mode: str = "none"  # "none", "waveform", "spiral", "tsp", "delaunay", "flowfield"
+    artistic_mode: str = "none"  # "none", "waveform", "spiral", "tsp", "delaunay", "flowfield", "voronoi", "reaction_diffusion", "stippling", "sbr"
     artistic_overlay_contours: bool = False  # If True, overlays detected edge contours over the artistic style
 
     # Waveform / Joy Division Parameters
@@ -94,6 +107,30 @@ class PlotParameters:
     flowfield_step_len: float = 2.5
     flowfield_max_steps: int = 50
     flowfield_direction: str = "tangent"  # "tangent" (contour flow) or "gradient"
+
+    # Voronoi Cellular Mosaic Parameters
+    voronoi_points: int = 1200
+    voronoi_edge_weight: float = 0.60
+
+    # Reaction-Diffusion (Turing Pattern) Parameters
+    rd_sim_resolution: int = 180
+    rd_iterations: int = 240
+    rd_feed_rate: float = 0.037
+    rd_kill_rate: float = 0.060
+    rd_contour_level: float = 0.28
+
+    # Voronoi Stippling (Lloyd's Relaxation) Parameters
+    stippling_points: int = 1500
+    stippling_lloyd_passes: int = 6
+    stippling_min_radius: float = 0.8
+    stippling_max_radius: float = 3.0
+    stippling_size_by_darkness: bool = True
+
+    # Stroke-Based Rendering (SBR) Parameters
+    sbr_strokes: int = 1500
+    sbr_length: float = 16.0
+    sbr_curvature: float = 0.65
+    sbr_align_mode: str = "tangent"  # "tangent" or "cross"
 
     # Export & physical page setup
     stroke_color: str = "#1a1a1a"

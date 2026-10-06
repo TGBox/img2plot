@@ -21,6 +21,12 @@ from .spiral import generate_spiral
 from .tsp_art import generate_tsp_art
 from .delaunay_art import generate_delaunay_art
 from .flowfield import generate_flowfield
+from .quadtree import apply_quadtree_decomposition
+from .pixel_sort import apply_pixel_sort
+from .voronoi_art import generate_voronoi_art
+from .reaction_diffusion import generate_reaction_diffusion
+from .voronoi_stippling import generate_voronoi_stippling
+from .sbr import generate_sbr_art
 from .engine import PlotEngine, StrokePath, PlotStats, EngineResult
 from .exporter import export_svg, export_png
 
@@ -43,6 +49,12 @@ __all__ = [
     "generate_tsp_art",
     "generate_delaunay_art",
     "generate_flowfield",
+    "apply_quadtree_decomposition",
+    "apply_pixel_sort",
+    "generate_voronoi_art",
+    "generate_reaction_diffusion",
+    "generate_voronoi_stippling",
+    "generate_sbr_art",
     "PlotEngine",
     "StrokePath",
     "PlotStats",
