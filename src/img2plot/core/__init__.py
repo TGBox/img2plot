@@ -27,6 +27,13 @@ from .voronoi_art import generate_voronoi_art
 from .reaction_diffusion import generate_reaction_diffusion
 from .voronoi_stippling import generate_voronoi_stippling
 from .sbr import generate_sbr_art
+from .anisotropic_kuwahara import apply_anisotropic_kuwahara
+from .fft_filter import apply_fft_filter
+from .cellular_automata import apply_cyclic_ca
+from .isocontour_art import generate_isocontours
+from .physarum_art import generate_physarum_art
+from .string_art import generate_string_art
+from .diffgrowth_art import generate_diffgrowth_art
 from .engine import PlotEngine, StrokePath, PlotStats, EngineResult
 from .exporter import export_svg, export_png
 
@@ -44,6 +51,7 @@ __all__ = [
     "generate_hatching",
     "generate_shapes",
     "apply_kuwahara",
+    "apply_anisotropic_kuwahara",
     "generate_waveform",
     "generate_spiral",
     "generate_tsp_art",
@@ -51,10 +59,16 @@ __all__ = [
     "generate_flowfield",
     "apply_quadtree_decomposition",
     "apply_pixel_sort",
+    "apply_fft_filter",
+    "apply_cyclic_ca",
     "generate_voronoi_art",
     "generate_reaction_diffusion",
     "generate_voronoi_stippling",
     "generate_sbr_art",
+    "generate_isocontours",
+    "generate_physarum_art",
+    "generate_string_art",
+    "generate_diffgrowth_art",
     "PlotEngine",
     "StrokePath",
     "PlotStats",

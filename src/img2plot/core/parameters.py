@@ -26,7 +26,9 @@ class PlotParameters:
     use_gaussian_blur: bool = True
     gaussian_kernel_size: float = 1.0
     use_kuwahara: bool = False
-    kuwahara_radius: int = 3  # Quadrant radius for painterly oil-painting smoothing (1 to 10)
+    kuwahara_radius: int = 3  # Radius for painterly oil-painting smoothing (1 to 10)
+    kuwahara_mode: str = "standard"  # "standard" (4 quadrants) or "anisotropic" (structure tensor)
+    kuwahara_anisotropy: float = 1.0  # Directional anisotropy strength for anisotropic Kuwahara
 
     # Preprocessing Filters: Quadtree & Pixel Sorting
     use_quadtree: bool = False
@@ -40,6 +42,20 @@ class PlotParameters:
     pixel_sort_lower_thresh: float = 0.25  # Minimum brightness threshold (0.0 to 1.0)
     pixel_sort_upper_thresh: float = 0.80  # Maximum brightness threshold (0.0 to 1.0)
     pixel_sort_reverse: bool = False  # Reverse sort order (descending instead of ascending)
+
+    # Preprocessing Filter: 2D-FFT Frequenzraum-Manipulation
+    use_fft: bool = False
+    fft_mode: str = "moiré"  # "moiré", "bandpass", "interference", "highpass"
+    fft_frequency: float = 12.0
+    fft_bandwidth: float = 6.0
+    fft_strength: float = 0.75
+
+    # Preprocessing Filter: Cyclic Cellular Automata
+    use_ca: bool = False
+    ca_states: int = 8
+    ca_iterations: int = 20
+    ca_threshold: int = 1
+    ca_strength: float = 0.85
 
     # Line tracing & edge detection
     termination_ratio: float = 0.2857  # ~ 1.0 / 3.5
@@ -131,6 +147,31 @@ class PlotParameters:
     sbr_length: float = 16.0
     sbr_curvature: float = 0.65
     sbr_align_mode: str = "tangent"  # "tangent" or "cross"
+
+    # Isocontour / Marching Squares Topographic Parameters
+    iso_levels: int = 16
+    iso_min_level: float = 0.08
+    iso_max_level: float = 0.92
+    iso_smoothing: float = 1.5
+
+    # Physarum Slime Mold Parameters
+    physarum_agents: int = 1500
+    physarum_iterations: int = 40
+    physarum_sim_res: int = 160
+    physarum_decay: float = 0.90
+    physarum_sensor_angle: float = 30.0
+
+    # String Art Parameters
+    string_pins: int = 240
+    string_max_lines: int = 1500
+    string_weight: float = 0.18
+    string_shape: str = "circle"  # "circle" or "rectangle"
+
+    # Differential Growth Parameters
+    diffgrowth_iterations: int = 50
+    diffgrowth_max_nodes: int = 1400
+    diffgrowth_collision_r: float = 6.0
+    diffgrowth_split_dist: float = 5.0
 
     # Export & physical page setup
     stroke_color: str = "#1a1a1a"

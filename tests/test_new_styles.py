@@ -19,6 +19,13 @@ from img2plot.core.voronoi_art import generate_voronoi_art
 from img2plot.core.reaction_diffusion import generate_reaction_diffusion
 from img2plot.core.voronoi_stippling import generate_voronoi_stippling
 from img2plot.core.sbr import generate_sbr_art
+from img2plot.core.anisotropic_kuwahara import apply_anisotropic_kuwahara
+from img2plot.core.fft_filter import apply_fft_filter
+from img2plot.core.cellular_automata import apply_cyclic_ca
+from img2plot.core.isocontour_art import generate_isocontours
+from img2plot.core.physarum_art import generate_physarum_art
+from img2plot.core.string_art import generate_string_art
+from img2plot.core.diffgrowth_art import generate_diffgrowth_art
 from img2plot.gui.sidebar import SidebarWidget
 
 
@@ -139,6 +146,63 @@ def test_stroke_based_rendering(test_image):
         assert p.is_artistic is True
 
 
+def test_anisotropic_kuwahara(test_image):
+    filtered = apply_anisotropic_kuwahara(test_image, radius=3, sharpness=4.0)
+    assert filtered.shape == test_image.shape
+    assert filtered.dtype == np.float32
+    assert 0.0 <= filtered.min() <= filtered.max() <= 1.0
+
+
+def test_fft_filter(test_image):
+    for f_type in ["moiré", "bandpass", "interference", "highpass"]:
+        filtered = apply_fft_filter(test_image, mode=f_type, frequency=20.0, strength=0.5)
+        assert filtered.shape == test_image.shape
+        assert filtered.dtype == np.float32
+        assert 0.0 <= filtered.min() <= filtered.max() <= 1.0
+
+
+def test_cyclic_ca(test_image):
+    ca_img = apply_cyclic_ca(test_image, num_states=6, iterations=3, threshold=1)
+    assert ca_img.shape == test_image.shape
+    assert ca_img.dtype == np.float32
+    assert 0.0 <= ca_img.min() <= ca_img.max() <= 1.0
+
+
+def test_isocontours(test_image):
+    paths = generate_isocontours(test_image, num_levels=6, min_length=5)
+    assert len(paths) > 0
+    for p in paths:
+        assert len(p.points) >= 2
+        assert p.is_artistic is True
+
+
+def test_physarum_art(test_image):
+    paths = generate_physarum_art(test_image, num_agents=80, iterations=15, decay_factor=0.85)
+    assert isinstance(paths, list)
+    for p in paths:
+        assert len(p.points) >= 2
+        assert p.is_artistic is True
+
+
+def test_string_art(test_image):
+    # Circle
+    paths_c = generate_string_art(test_image, num_pins=48, max_strings=120, pin_shape="circle")
+    assert len(paths_c) == 1
+    assert len(paths_c[0].points) > 10
+    # Rectangle
+    paths_s = generate_string_art(test_image, num_pins=48, max_strings=120, pin_shape="rectangle")
+    assert len(paths_s) == 1
+    assert len(paths_s[0].points) > 10
+
+
+def test_diffgrowth_art(test_image):
+    paths = generate_diffgrowth_art(test_image, iterations=15, max_nodes=80, split_dist=8.0)
+    assert len(paths) > 0
+    for p in paths:
+        assert len(p.points) >= 2
+        assert p.is_artistic is True
+
+
 def test_engine_integration_with_new_modes(test_image):
     from PIL import Image
 
@@ -180,7 +244,59 @@ def test_engine_integration_with_new_modes(test_image):
     res_sbr = engine_sbr.process_image(pil_img, is_preview=True)
     assert len(res_sbr.paths) > 0
 
-    # 5. Preprocessing filter with Quadtree vector boxes
+    # 5. Isocontours mode
+    params_iso = PlotParameters(
+        artistic_mode="isocontours",
+        iso_levels=8,
+    )
+    engine_iso = PlotEngine(params_iso)
+    res_iso = engine_iso.process_image(pil_img, is_preview=True)
+    assert len(res_iso.paths) > 0
+
+    # 6. Physarum mode
+    params_phy = PlotParameters(
+        artistic_mode="physarum",
+        physarum_agents=80,
+        physarum_iterations=15,
+    )
+    engine_phy = PlotEngine(params_phy)
+    res_phy = engine_phy.process_image(pil_img, is_preview=True)
+    assert isinstance(res_phy.paths, list)
+
+    # 7. String art mode
+    params_str = PlotParameters(
+        artistic_mode="string_art",
+        string_pins=48,
+        string_max_lines=100,
+    )
+    engine_str = PlotEngine(params_str)
+    res_str = engine_str.process_image(pil_img, is_preview=True)
+    assert len(res_str.paths) > 0
+
+    # 8. Diffgrowth mode
+    params_dg = PlotParameters(
+        artistic_mode="diffgrowth",
+        diffgrowth_iterations=15,
+        diffgrowth_max_nodes=60,
+    )
+    engine_dg = PlotEngine(params_dg)
+    res_dg = engine_dg.process_image(pil_img, is_preview=True)
+    assert len(res_dg.paths) > 0
+
+    # 9. Preprocessing filter with Anisotropic Kuwahara + FFT
+    params_filters = PlotParameters(
+        use_kuwahara=True,
+        kuwahara_mode="anisotropic",
+        kuwahara_radius=2,
+        use_fft=True,
+        fft_mode="moiré",
+        artistic_mode="none",
+    )
+    engine_filters = PlotEngine(params_filters)
+    res_filters = engine_filters.process_image(pil_img, is_preview=True)
+    assert len(res_filters.paths) > 0
+
+    # 10. Preprocessing filter with Quadtree vector boxes
     params_qt = PlotParameters(
         use_quadtree=True,
         quadtree_threshold=0.05,
@@ -196,44 +312,48 @@ def test_engine_integration_with_new_modes(test_image):
 def test_sidebar_ui_new_styles_and_badges(app):
     sidebar = SidebarWidget()
 
-    # Verify new artistic mode items exist in combo box
-    assert sidebar.combo_artistic_mode.count() == 10
+    # Verify all 14 artistic modes exist in combo box
+    assert sidebar.combo_artistic_mode.count() == 14
     assert "Voronoi" in sidebar.combo_artistic_mode.itemText(6)
     assert "Reaktions-Diffusion" in sidebar.combo_artistic_mode.itemText(7)
     assert "Stippling" in sidebar.combo_artistic_mode.itemText(8)
     assert "Stroke-Based" in sidebar.combo_artistic_mode.itemText(9)
+    assert "Marching Squares" in sidebar.combo_artistic_mode.itemText(10)
+    assert "Physarum" in sidebar.combo_artistic_mode.itemText(11)
+    assert "String-Art" in sidebar.combo_artistic_mode.itemText(12)
+    assert "Differenzielles" in sidebar.combo_artistic_mode.itemText(13)
 
     # Check subpanels switching
-    sidebar.combo_artistic_mode.setCurrentIndex(6)
-    assert sidebar.widget_voronoi_opts.isHidden() is False
-    assert sidebar.widget_rd_opts.isHidden() is True
-    assert "Voronoi" in sidebar.acc_artistic.lbl_badge.text()
+    sidebar.combo_artistic_mode.setCurrentIndex(10)
+    assert sidebar.widget_iso_opts.isHidden() is False
+    assert "Iso" in sidebar.acc_artistic.lbl_badge.text()
 
-    sidebar.combo_artistic_mode.setCurrentIndex(7)
-    assert sidebar.widget_rd_opts.isHidden() is False
-    assert "Turing" in sidebar.acc_artistic.lbl_badge.text()
+    sidebar.combo_artistic_mode.setCurrentIndex(11)
+    assert sidebar.widget_physarum_opts.isHidden() is False
+    assert "Physarum" in sidebar.acc_artistic.lbl_badge.text()
 
-    sidebar.combo_artistic_mode.setCurrentIndex(8)
-    assert sidebar.widget_stippling_opts.isHidden() is False
-    assert "Stippling" in sidebar.acc_artistic.lbl_badge.text()
+    sidebar.combo_artistic_mode.setCurrentIndex(12)
+    assert sidebar.widget_string_opts.isHidden() is False
+    assert "String-Art" in sidebar.acc_artistic.lbl_badge.text()
 
-    sidebar.combo_artistic_mode.setCurrentIndex(9)
-    assert sidebar.widget_sbr_opts.isHidden() is False
-    assert "SBR" in sidebar.acc_artistic.lbl_badge.text()
+    sidebar.combo_artistic_mode.setCurrentIndex(13)
+    assert sidebar.widget_diffgrowth_opts.isHidden() is False
+    assert "Diff-Growth" in sidebar.acc_artistic.lbl_badge.text()
 
     # Check filter controls
-    sidebar.chk_quadtree.setChecked(True)
-    assert sidebar.slider_quadtree_thresh.isHidden() is False
-    assert "Quadtree" in sidebar.acc_filter.lbl_badge.text()
+    sidebar.chk_fft.setChecked(True)
+    assert sidebar.widget_fft_opts.isHidden() is False
+    assert "FFT" in sidebar.acc_filter.lbl_badge.text()
 
-    sidebar.chk_pixel_sort.setChecked(True)
-    assert sidebar.widget_pixel_sort_opts.isHidden() is False
+    sidebar.chk_fft.setChecked(False)
+    sidebar.chk_ca.setChecked(True)
+    assert sidebar.widget_ca_opts.isHidden() is False
+    assert "CCA" in sidebar.acc_filter.lbl_badge.text()
 
     # Parameter sync
     params = sidebar.get_current_parameters()
-    assert params.artistic_mode == "sbr"
-    assert params.use_quadtree is True
-    assert params.use_pixel_sort is True
+    assert params.artistic_mode == "diffgrowth"
+    assert params.use_ca is True
 
 
 def test_svg_export_new_styles(test_image, tmp_path):
@@ -242,11 +362,30 @@ def test_svg_export_new_styles(test_image, tmp_path):
 
     pil_img = Image.fromarray((test_image * 255).astype(np.uint8))
 
-    for mode in ["voronoi", "reaction_diffusion", "stippling", "sbr"]:
+    modes_to_test = [
+        "voronoi",
+        "reaction_diffusion",
+        "stippling",
+        "sbr",
+        "isocontours",
+        "physarum",
+        "string_art",
+        "diffgrowth",
+    ]
+    for mode in modes_to_test:
         params = PlotParameters(artistic_mode=mode)
         if mode == "reaction_diffusion":
             params.rd_sim_resolution = 50
             params.rd_iterations = 25
+        elif mode == "physarum":
+            params.physarum_agents = 80
+            params.physarum_iterations = 15
+        elif mode == "string_art":
+            params.string_pins = 48
+            params.string_max_lines = 100
+        elif mode == "diffgrowth":
+            params.diffgrowth_iterations = 15
+            params.diffgrowth_max_nodes = 50
         engine = PlotEngine(params)
         res = engine.process_image(pil_img, is_preview=True)
 

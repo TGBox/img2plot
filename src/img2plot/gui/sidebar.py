@@ -490,7 +490,13 @@ class SidebarWidget(QWidget):
         has_kuwahara = hasattr(self, "chk_kuwahara") and self.chk_kuwahara.isChecked()
         has_quadtree = hasattr(self, "chk_quadtree") and self.chk_quadtree.isChecked()
         has_pixel_sort = hasattr(self, "chk_pixel_sort") and self.chk_pixel_sort.isChecked()
-        if has_quadtree and has_pixel_sort:
+        has_fft = hasattr(self, "chk_fft") and self.chk_fft.isChecked()
+        has_ca = hasattr(self, "chk_ca") and self.chk_ca.isChecked()
+        if has_fft:
+            self.acc_filter.set_badge("• 2D-FFT aktiv", active=True)
+        elif has_ca:
+            self.acc_filter.set_badge("• Automaten (CCA)", active=True)
+        elif has_quadtree and has_pixel_sort:
             self.acc_filter.set_badge("• Quadtree + Glitch", active=True)
         elif has_quadtree:
             self.acc_filter.set_badge("• Quadtree aktiv", active=True)
@@ -498,7 +504,9 @@ class SidebarWidget(QWidget):
             self.acc_filter.set_badge("• Pixel-Sort aktiv", active=True)
         elif has_kuwahara:
             r = int(self.slider_kuwahara_r.get_value()) if hasattr(self, "slider_kuwahara_r") else 3
-            self.acc_filter.set_badge(f"• Kuwahara (R={r})", active=True)
+            is_aniso = hasattr(self, "combo_kuwahara_mode") and self.combo_kuwahara_mode.currentIndex() == 1
+            mode_lbl = "Aniso" if is_aniso else "Kuwahara"
+            self.acc_filter.set_badge(f"• {mode_lbl} (R={r})", active=True)
         else:
             self.acc_filter.set_badge("Standard", active=False)
 
@@ -516,6 +524,10 @@ class SidebarWidget(QWidget):
                 "• Turing-Muster",
                 "• Stippling",
                 "• SBR-Pinsel",
+                "• Iso-Konturen",
+                "• Physarum",
+                "• String-Art",
+                "• Diff-Growth",
             ]
             if 0 < idx < len(mode_names):
                 self.acc_artistic.set_badge(mode_names[idx], active=True)
@@ -725,6 +737,12 @@ class SidebarWidget(QWidget):
         self.chk_kuwahara.stateChanged.connect(self._on_filter_toggled)
         layout.addWidget(self.chk_kuwahara)
 
+        self.combo_kuwahara_mode = QComboBox()
+        self.combo_kuwahara_mode.addItems(["Klassisch (4 Sektoren)", "Anisotrop (Strukturtensor)"])
+        self.combo_kuwahara_mode.currentIndexChanged.connect(self._on_filter_toggled)
+        self.combo_kuwahara_mode.setVisible(False)
+        layout.addWidget(self.combo_kuwahara_mode)
+
         self.slider_kuwahara_r = SliderRow(
             title="Ölgemälde-Pinselgröße (Radius):",
             min_val=1,
@@ -737,6 +755,19 @@ class SidebarWidget(QWidget):
         self.slider_kuwahara_r.sig_value_changed.connect(self._emit_param_change)
         self.slider_kuwahara_r.setVisible(False)
         layout.addWidget(self.slider_kuwahara_r)
+
+        self.slider_kuwahara_anisotropy = SliderRow(
+            title="Anisotropie-Stärke:",
+            min_val=0.1,
+            max_val=3.0,
+            default_val=1.0,
+            step=0.1,
+            decimals=1,
+            tooltip="Stärke der Kantenfluss-Dehnung bei anisotropem Kuwahara.",
+        )
+        self.slider_kuwahara_anisotropy.sig_value_changed.connect(self._emit_param_change)
+        self.slider_kuwahara_anisotropy.setVisible(False)
+        layout.addWidget(self.slider_kuwahara_anisotropy)
 
         # Quadtree decomposition filter
         self.chk_quadtree = QCheckBox("Quadtree-Dekomposition (Block-Abstraktion)")
@@ -828,6 +859,104 @@ class SidebarWidget(QWidget):
         self.widget_pixel_sort_opts.setVisible(False)
         layout.addWidget(self.widget_pixel_sort_opts)
 
+        # 2D-FFT frequency domain filter
+        self.chk_fft = QCheckBox("2D-FFT Frequenzraum-Filter (Moiré / Wellen)")
+        self.chk_fft.setChecked(False)
+        self.chk_fft.setToolTip("Filtert Amplitude oder Phase im Frequenzraum für Moiré-Effekte und Welleninterferenzen.")
+        self.chk_fft.stateChanged.connect(self._on_filter_toggled)
+        layout.addWidget(self.chk_fft)
+
+        self.widget_fft_opts = QWidget()
+        fft_layout = QVBoxLayout(self.widget_fft_opts)
+        fft_layout.setContentsMargins(0, 0, 0, 0)
+        fft_layout.setSpacing(4)
+
+        fft_layout.addWidget(QLabel("FFT Filtertyp:"))
+        self.combo_fft_type = QComboBox()
+        self.combo_fft_type.addItems([
+            "Moiré-Interferenz (Ringe)",
+            "Bandpass (Frequenzband)",
+            "Richtungs-Interferenz (Wellen)",
+            "Hochpass (Kantenfrequenzen)",
+        ])
+        self.combo_fft_type.currentIndexChanged.connect(self._emit_param_change)
+        fft_layout.addWidget(self.combo_fft_type)
+
+        self.slider_fft_freq = SliderRow(
+            title="Frequenz-Radius / Gitter:",
+            min_val=2.0,
+            max_val=80.0,
+            default_val=25.0,
+            step=1.0,
+            decimals=1,
+            tooltip="Ziel-Frequenzradius für Bandpass oder Moiré-Muster.",
+        )
+        self.slider_fft_freq.sig_value_changed.connect(self._emit_param_change)
+        fft_layout.addWidget(self.slider_fft_freq)
+
+        self.slider_fft_amount = SliderRow(
+            title="Misch-Intensität:",
+            min_val=0.05,
+            max_val=1.0,
+            default_val=0.6,
+            step=0.05,
+            decimals=2,
+            tooltip="Mischungsverhältnis zwischen Original und FFT-Muster.",
+        )
+        self.slider_fft_amount.sig_value_changed.connect(self._emit_param_change)
+        fft_layout.addWidget(self.slider_fft_amount)
+
+        self.widget_fft_opts.setVisible(False)
+        layout.addWidget(self.widget_fft_opts)
+
+        # Cyclic Cellular Automata filter
+        self.chk_ca = QCheckBox("Zelluläre Automaten (CCA Kristallisation)")
+        self.chk_ca.setChecked(False)
+        self.chk_ca.setToolTip("Transformiert Bildpixel durch zyklische Nachbarschaftsregeln in kristalline Muster.")
+        self.chk_ca.stateChanged.connect(self._on_filter_toggled)
+        layout.addWidget(self.chk_ca)
+
+        self.widget_ca_opts = QWidget()
+        ca_layout = QVBoxLayout(self.widget_ca_opts)
+        ca_layout.setContentsMargins(0, 0, 0, 0)
+        ca_layout.setSpacing(4)
+
+        self.slider_ca_steps = SliderRow(
+            title="Simulations-Schritte:",
+            min_val=1,
+            max_val=25,
+            default_val=6,
+            step=1,
+            tooltip="Anzahl Zyklen des zellulären Automaten.",
+        )
+        self.slider_ca_steps.sig_value_changed.connect(self._emit_param_change)
+        ca_layout.addWidget(self.slider_ca_steps)
+
+        self.slider_ca_states = SliderRow(
+            title="Zustände (Farbstufen):",
+            min_val=3,
+            max_val=16,
+            default_val=8,
+            step=1,
+            tooltip="Anzahl der diskreten Zustände im Automaten.",
+        )
+        self.slider_ca_states.sig_value_changed.connect(self._emit_param_change)
+        ca_layout.addWidget(self.slider_ca_states)
+
+        self.slider_ca_threshold = SliderRow(
+            title="Nachbarschafts-Schwelle:",
+            min_val=1,
+            max_val=5,
+            default_val=1,
+            step=1,
+            tooltip="Mindestanzahl an Nachbarn für einen Zustandsübergang.",
+        )
+        self.slider_ca_threshold.sig_value_changed.connect(self._emit_param_change)
+        ca_layout.addWidget(self.slider_ca_threshold)
+
+        self.widget_ca_opts.setVisible(False)
+        layout.addWidget(self.widget_ca_opts)
+
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
@@ -839,8 +968,15 @@ class SidebarWidget(QWidget):
             self.slider_clahe_kernel.setVisible(self.chk_clahe.isChecked())
         if hasattr(self, "slider_blur_sigma"):
             self.slider_blur_sigma.setVisible(self.chk_blur.isChecked())
-        if hasattr(self, "slider_kuwahara_r"):
-            self.slider_kuwahara_r.setVisible(self.chk_kuwahara.isChecked())
+        if hasattr(self, "chk_kuwahara"):
+            is_kuw = self.chk_kuwahara.isChecked()
+            if hasattr(self, "slider_kuwahara_r"):
+                self.slider_kuwahara_r.setVisible(is_kuw)
+            if hasattr(self, "combo_kuwahara_mode"):
+                self.combo_kuwahara_mode.setVisible(is_kuw)
+            if hasattr(self, "slider_kuwahara_anisotropy"):
+                is_aniso = hasattr(self, "combo_kuwahara_mode") and self.combo_kuwahara_mode.currentIndex() == 1
+                self.slider_kuwahara_anisotropy.setVisible(is_kuw and is_aniso)
         if hasattr(self, "chk_quadtree"):
             is_qt = self.chk_quadtree.isChecked()
             self.slider_quadtree_thresh.setVisible(is_qt)
@@ -848,6 +984,10 @@ class SidebarWidget(QWidget):
             self.chk_quadtree_render_boxes.setVisible(is_qt)
         if hasattr(self, "chk_pixel_sort"):
             self.widget_pixel_sort_opts.setVisible(self.chk_pixel_sort.isChecked())
+        if hasattr(self, "chk_fft"):
+            self.widget_fft_opts.setVisible(self.chk_fft.isChecked())
+        if hasattr(self, "chk_ca"):
+            self.widget_ca_opts.setVisible(self.chk_ca.isChecked())
         self._emit_param_change()
 
     def _build_line_detection_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
@@ -970,6 +1110,10 @@ class SidebarWidget(QWidget):
         "reaction_diffusion",
         "stippling",
         "sbr",
+        "isocontours",
+        "physarum",
+        "string_art",
+        "diffgrowth",
     ]
 
     def _build_artistic_modes_section(self, parent_layout: Optional[QVBoxLayout] = None) -> None:
@@ -991,6 +1135,10 @@ class SidebarWidget(QWidget):
             "Reaktions-Diffusion (Turing-Muster)",
             "Voronoi Stippling (Lloyd-Relaxation)",
             "Stroke-Based Rendering (Bézier-Pinselstriche)",
+            "Marching Squares (Iso-Höhenlinien)",
+            "Physarum-Simulation (Schleimpilz-Netzwerk)",
+            "String-Art (Radon/Bresenham Fadenbild)",
+            "Differenzielles Wachstum (Differential Growth)",
         ])
         self.combo_artistic_mode.currentIndexChanged.connect(self._on_artistic_mode_changed)
         layout.addWidget(self.combo_artistic_mode)
@@ -1385,6 +1533,197 @@ class SidebarWidget(QWidget):
         sbr_layout.addWidget(self.combo_sbr_align)
         layout.addWidget(self.widget_sbr_opts)
 
+        # --- Marching Squares / Isocontour controls ---
+        self.widget_iso_opts = QWidget()
+        iso_layout = QVBoxLayout(self.widget_iso_opts)
+        iso_layout.setContentsMargins(0, 0, 0, 0)
+        iso_layout.setSpacing(4)
+
+        self.slider_iso_levels = SliderRow(
+            title="Höhenschichten (Isolinien):",
+            min_val=3,
+            max_val=40,
+            default_val=12,
+            step=1,
+            tooltip="Anzahl der Helligkeitsstufen für Iso-Höhenlinien.",
+        )
+        self.slider_iso_levels.sig_value_changed.connect(self._emit_param_change)
+        iso_layout.addWidget(self.slider_iso_levels)
+
+        self.slider_iso_min_length = SliderRow(
+            title="Minimale Linienlänge:",
+            min_val=2,
+            max_val=50,
+            default_val=8,
+            step=1,
+            suffix="px",
+            tooltip="Filtert winzige Iso-Kreise und Fragmente heraus.",
+        )
+        self.slider_iso_min_length.sig_value_changed.connect(self._emit_param_change)
+        iso_layout.addWidget(self.slider_iso_min_length)
+
+        self.chk_iso_smooth = QCheckBox("Bézier-Glättung der Isolinien")
+        self.chk_iso_smooth.setChecked(True)
+        self.chk_iso_smooth.stateChanged.connect(self._emit_param_change)
+        iso_layout.addWidget(self.chk_iso_smooth)
+        layout.addWidget(self.widget_iso_opts)
+
+        # --- Physarum (Slime Mold) controls ---
+        self.widget_physarum_opts = QWidget()
+        phy_layout = QVBoxLayout(self.widget_physarum_opts)
+        phy_layout.setContentsMargins(0, 0, 0, 0)
+        phy_layout.setSpacing(4)
+
+        self.slider_physarum_agents = SliderRow(
+            title="Partikel-Anzahl (Agenten):",
+            min_val=200,
+            max_val=3000,
+            default_val=1000,
+            step=50,
+            tooltip="Anzahl autonomer Schleimpilz-Agenten.",
+        )
+        self.slider_physarum_agents.sig_value_changed.connect(self._emit_param_change)
+        phy_layout.addWidget(self.slider_physarum_agents)
+
+        self.slider_physarum_steps = SliderRow(
+            title="Simulations-Schritte:",
+            min_val=10,
+            max_val=120,
+            default_val=40,
+            step=5,
+            tooltip="Dauer des Schleimpilz-Wachstums.",
+        )
+        self.slider_physarum_steps.sig_value_changed.connect(self._emit_param_change)
+        phy_layout.addWidget(self.slider_physarum_steps)
+
+        self.slider_physarum_decay = SliderRow(
+            title="Spur-Verblassung (Decay):",
+            min_val=0.50,
+            max_val=0.99,
+            default_val=0.90,
+            step=0.01,
+            decimals=2,
+            tooltip="Verdunstungsrate der Pheromon-Spurkarte je Schritt.",
+        )
+        self.slider_physarum_decay.sig_value_changed.connect(self._emit_param_change)
+        phy_layout.addWidget(self.slider_physarum_decay)
+
+        self.slider_physarum_sensor_angle = SliderRow(
+            title="Sensor-Winkel:",
+            min_val=10.0,
+            max_val=60.0,
+            default_val=22.5,
+            step=2.5,
+            decimals=1,
+            suffix="°",
+            tooltip="Erkennungswinkel der Agentensensoren.",
+        )
+        self.slider_physarum_sensor_angle.sig_value_changed.connect(self._emit_param_change)
+        phy_layout.addWidget(self.slider_physarum_sensor_angle)
+        layout.addWidget(self.widget_physarum_opts)
+
+        # --- String-Art controls ---
+        self.widget_string_opts = QWidget()
+        str_layout = QVBoxLayout(self.widget_string_opts)
+        str_layout.setContentsMargins(0, 0, 0, 0)
+        str_layout.setSpacing(4)
+
+        self.slider_string_pins = SliderRow(
+            title="Rand-Pins (Nägel):",
+            min_val=60,
+            max_val=360,
+            default_val=180,
+            step=10,
+            tooltip="Anzahl Nägel entlang des Randes.",
+        )
+        self.slider_string_pins.sig_value_changed.connect(self._emit_param_change)
+        str_layout.addWidget(self.slider_string_pins)
+
+        self.slider_string_lines = SliderRow(
+            title="Faden-Iterationen (Sehnen):",
+            min_val=200,
+            max_val=3500,
+            default_val=1200,
+            step=50,
+            tooltip="Gesamtzahl gespannter Fadensegmente.",
+        )
+        self.slider_string_lines.sig_value_changed.connect(self._emit_param_change)
+        str_layout.addWidget(self.slider_string_lines)
+
+        self.slider_string_opacity = SliderRow(
+            title="Fadendichte / Abzug:",
+            min_val=0.05,
+            max_val=0.50,
+            default_val=0.18,
+            step=0.01,
+            decimals=2,
+            tooltip="Subtraktionsgewicht je gespannter Fadenlinie.",
+        )
+        self.slider_string_opacity.sig_value_changed.connect(self._emit_param_change)
+        str_layout.addWidget(self.slider_string_opacity)
+
+        str_layout.addWidget(QLabel("Rahmenform:"))
+        self.combo_string_shape = QComboBox()
+        self.combo_string_shape.addItems(["Kreis", "Quadrat"])
+        self.combo_string_shape.currentIndexChanged.connect(self._emit_param_change)
+        str_layout.addWidget(self.combo_string_shape)
+        layout.addWidget(self.widget_string_opts)
+
+        # --- Differential Growth controls ---
+        self.widget_diffgrowth_opts = QWidget()
+        diff_layout = QVBoxLayout(self.widget_diffgrowth_opts)
+        diff_layout.setContentsMargins(0, 0, 0, 0)
+        diff_layout.setSpacing(4)
+
+        self.slider_diffgrowth_iter = SliderRow(
+            title="Wachstums-Iterationen:",
+            min_val=10,
+            max_val=150,
+            default_val=50,
+            step=5,
+            tooltip="Anzahl Schritte differentieller Knotenteilung.",
+        )
+        self.slider_diffgrowth_iter.sig_value_changed.connect(self._emit_param_change)
+        diff_layout.addWidget(self.slider_diffgrowth_iter)
+
+        self.slider_diffgrowth_nodes = SliderRow(
+            title="Max. Knotenanzahl:",
+            min_val=100,
+            max_val=2000,
+            default_val=600,
+            step=50,
+            tooltip="Maximale Anzahl Linienknoten bevor das Wachstum stoppt.",
+        )
+        self.slider_diffgrowth_nodes.sig_value_changed.connect(self._emit_param_change)
+        diff_layout.addWidget(self.slider_diffgrowth_nodes)
+
+        self.slider_diffgrowth_feed = SliderRow(
+            title="Kanten-Teilung (Wachstumsdrang):",
+            min_val=3.0,
+            max_val=25.0,
+            default_val=10.0,
+            step=1.0,
+            decimals=1,
+            suffix="px",
+            tooltip="Abstand, ab dem Kanten geteilt werden.",
+        )
+        self.slider_diffgrowth_feed.sig_value_changed.connect(self._emit_param_change)
+        diff_layout.addWidget(self.slider_diffgrowth_feed)
+
+        self.slider_diffgrowth_repulsion = SliderRow(
+            title="Abstoßungs-Radius (Kollision):",
+            min_val=4.0,
+            max_val=30.0,
+            default_val=12.0,
+            step=1.0,
+            decimals=1,
+            suffix="px",
+            tooltip="Mindestabstand zwischen Knoten zur Vermeidung von Selbstüberschneidungen.",
+        )
+        self.slider_diffgrowth_repulsion.sig_value_changed.connect(self._emit_param_change)
+        diff_layout.addWidget(self.slider_diffgrowth_repulsion)
+        layout.addWidget(self.widget_diffgrowth_opts)
+
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
@@ -1402,6 +1741,14 @@ class SidebarWidget(QWidget):
         self.widget_rd_opts.setVisible(idx == 7)
         self.widget_stippling_opts.setVisible(idx == 8)
         self.widget_sbr_opts.setVisible(idx == 9)
+        if hasattr(self, "widget_iso_opts"):
+            self.widget_iso_opts.setVisible(idx == 10)
+        if hasattr(self, "widget_physarum_opts"):
+            self.widget_physarum_opts.setVisible(idx == 11)
+        if hasattr(self, "widget_string_opts"):
+            self.widget_string_opts.setVisible(idx == 12)
+        if hasattr(self, "widget_diffgrowth_opts"):
+            self.widget_diffgrowth_opts.setVisible(idx == 13)
         self.chk_artistic_overlay.setVisible(idx > 0)
         self._emit_param_change()
 
@@ -1895,8 +2242,11 @@ class SidebarWidget(QWidget):
         p.gaussian_kernel_size = self.slider_blur_sigma.get_value()
         p.use_kuwahara = self.chk_kuwahara.isChecked()
         p.kuwahara_radius = int(self.slider_kuwahara_r.get_value())
+        if hasattr(self, "combo_kuwahara_mode"):
+            p.kuwahara_mode = "anisotropic" if self.combo_kuwahara_mode.currentIndex() == 1 else "classic"
+            p.kuwahara_anisotropy = self.slider_kuwahara_anisotropy.get_value()
 
-        # Preprocessing filter: Quadtree & Pixel Sorting
+        # Preprocessing filter: Quadtree & Pixel Sorting & FFT & CA
         if hasattr(self, "chk_quadtree"):
             p.use_quadtree = self.chk_quadtree.isChecked()
             p.quadtree_threshold = self.slider_quadtree_thresh.get_value()
@@ -1909,6 +2259,20 @@ class SidebarWidget(QWidget):
             p.pixel_sort_lower_thresh = self.slider_pixel_sort_lower.get_value()
             p.pixel_sort_upper_thresh = self.slider_pixel_sort_upper.get_value()
             p.pixel_sort_reverse = self.chk_pixel_sort_rev.isChecked()
+
+        if hasattr(self, "chk_fft"):
+            p.use_fft = self.chk_fft.isChecked()
+            fft_types = ["moiré", "bandpass", "interference", "highpass"]
+            f_idx = self.combo_fft_type.currentIndex()
+            p.fft_mode = fft_types[f_idx] if 0 <= f_idx < len(fft_types) else "moiré"
+            p.fft_frequency = self.slider_fft_freq.get_value()
+            p.fft_strength = self.slider_fft_amount.get_value()
+
+        if hasattr(self, "chk_ca"):
+            p.use_ca = self.chk_ca.isChecked()
+            p.ca_iterations = int(self.slider_ca_steps.get_value())
+            p.ca_states = int(self.slider_ca_states.get_value())
+            p.ca_threshold = int(self.slider_ca_threshold.get_value())
 
         # Artistic mode
         a_idx = self.combo_artistic_mode.currentIndex()
@@ -1951,6 +2315,27 @@ class SidebarWidget(QWidget):
             p.sbr_length = self.slider_sbr_length.get_value()
             p.sbr_curvature = self.slider_sbr_curv.get_value()
             p.sbr_align_mode = "tangent" if self.combo_sbr_align.currentIndex() == 0 else "cross"
+
+        if hasattr(self, "slider_iso_levels"):
+            p.iso_levels = int(self.slider_iso_levels.get_value())
+
+        if hasattr(self, "slider_physarum_agents"):
+            p.physarum_agents = int(self.slider_physarum_agents.get_value())
+            p.physarum_iterations = int(self.slider_physarum_steps.get_value())
+            p.physarum_decay = self.slider_physarum_decay.get_value()
+            p.physarum_sensor_angle = self.slider_physarum_sensor_angle.get_value()
+
+        if hasattr(self, "slider_string_pins"):
+            p.string_pins = int(self.slider_string_pins.get_value())
+            p.string_max_lines = int(self.slider_string_lines.get_value())
+            p.string_weight = self.slider_string_opacity.get_value()
+            p.string_shape = "circle" if self.combo_string_shape.currentIndex() == 0 else "rectangle"
+
+        if hasattr(self, "slider_diffgrowth_iter"):
+            p.diffgrowth_iterations = int(self.slider_diffgrowth_iter.get_value())
+            p.diffgrowth_max_nodes = int(self.slider_diffgrowth_nodes.get_value())
+            p.diffgrowth_split_dist = self.slider_diffgrowth_feed.get_value()
+            p.diffgrowth_collision_r = self.slider_diffgrowth_repulsion.get_value()
 
         p.termination_ratio = self.slider_term_ratio.get_value()
         p.line_continue_thresh = self.slider_continue_thresh.get_value()
@@ -2011,6 +2396,9 @@ class SidebarWidget(QWidget):
         self.slider_blur_sigma.set_value(p.gaussian_kernel_size)
         self.chk_kuwahara.setChecked(p.use_kuwahara)
         self.slider_kuwahara_r.set_value(p.kuwahara_radius)
+        if hasattr(self, "combo_kuwahara_mode"):
+            self.combo_kuwahara_mode.setCurrentIndex(1 if p.kuwahara_mode == "anisotropic" else 0)
+            self.slider_kuwahara_anisotropy.set_value(p.kuwahara_anisotropy)
 
         if hasattr(self, "chk_quadtree"):
             self.chk_quadtree.setChecked(p.use_quadtree)
@@ -2024,6 +2412,24 @@ class SidebarWidget(QWidget):
             self.slider_pixel_sort_lower.set_value(p.pixel_sort_lower_thresh)
             self.slider_pixel_sort_upper.set_value(p.pixel_sort_upper_thresh)
             self.chk_pixel_sort_rev.setChecked(p.pixel_sort_reverse)
+
+        if hasattr(self, "chk_fft"):
+            self.chk_fft.setChecked(getattr(p, "use_fft", False))
+            fft_types = ["moiré", "bandpass", "interference", "highpass"]
+            cur_mode = getattr(p, "fft_mode", "moiré")
+            try:
+                f_idx = fft_types.index(cur_mode)
+            except ValueError:
+                f_idx = 0
+            self.combo_fft_type.setCurrentIndex(f_idx)
+            self.slider_fft_freq.set_value(getattr(p, "fft_frequency", 12.0))
+            self.slider_fft_amount.set_value(getattr(p, "fft_strength", 0.75))
+
+        if hasattr(self, "chk_ca"):
+            self.chk_ca.setChecked(getattr(p, "use_ca", False))
+            self.slider_ca_steps.set_value(getattr(p, "ca_iterations", 20))
+            self.slider_ca_states.set_value(getattr(p, "ca_states", 8))
+            self.slider_ca_threshold.set_value(getattr(p, "ca_threshold", 1))
 
         # Artistic mode
         try:
@@ -2069,6 +2475,27 @@ class SidebarWidget(QWidget):
             self.slider_sbr_length.set_value(p.sbr_length)
             self.slider_sbr_curv.set_value(p.sbr_curvature)
             self.combo_sbr_align.setCurrentIndex(0 if p.sbr_align_mode == "tangent" else 1)
+
+        if hasattr(self, "slider_iso_levels"):
+            self.slider_iso_levels.set_value(getattr(p, "iso_levels", 16))
+
+        if hasattr(self, "slider_physarum_agents"):
+            self.slider_physarum_agents.set_value(getattr(p, "physarum_agents", 1500))
+            self.slider_physarum_steps.set_value(getattr(p, "physarum_iterations", 40))
+            self.slider_physarum_decay.set_value(getattr(p, "physarum_decay", 0.90))
+            self.slider_physarum_sensor_angle.set_value(getattr(p, "physarum_sensor_angle", 30.0))
+
+        if hasattr(self, "slider_string_pins"):
+            self.slider_string_pins.set_value(getattr(p, "string_pins", 240))
+            self.slider_string_lines.set_value(getattr(p, "string_max_lines", 1500))
+            self.slider_string_opacity.set_value(getattr(p, "string_weight", 0.18))
+            self.combo_string_shape.setCurrentIndex(0 if getattr(p, "string_shape", "circle") == "circle" else 1)
+
+        if hasattr(self, "slider_diffgrowth_iter"):
+            self.slider_diffgrowth_iter.set_value(getattr(p, "diffgrowth_iterations", 50))
+            self.slider_diffgrowth_nodes.set_value(getattr(p, "diffgrowth_max_nodes", 1400))
+            self.slider_diffgrowth_feed.set_value(getattr(p, "diffgrowth_split_dist", 5.0))
+            self.slider_diffgrowth_repulsion.set_value(getattr(p, "diffgrowth_collision_r", 6.0))
 
         self._on_artistic_mode_changed(art_idx)
 

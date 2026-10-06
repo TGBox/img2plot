@@ -30,6 +30,13 @@ from .voronoi_art import generate_voronoi_art
 from .reaction_diffusion import generate_reaction_diffusion
 from .voronoi_stippling import generate_voronoi_stippling
 from .sbr import generate_sbr_art
+from .anisotropic_kuwahara import apply_anisotropic_kuwahara
+from .fft_filter import apply_fft_filter
+from .cellular_automata import apply_cyclic_ca
+from .isocontour_art import generate_isocontours
+from .physarum_art import generate_physarum_art
+from .string_art import generate_string_art
+from .diffgrowth_art import generate_diffgrowth_art
 
 Point2D = Tuple[float, float]
 
@@ -500,6 +507,7 @@ class PlotEngine:
             self.params.gaussian_kernel_size,
             self.params.use_kuwahara,
             self.params.kuwahara_radius,
+            self.params.kuwahara_mode,
             self.params.use_quadtree,
             self.params.quadtree_threshold,
             self.params.quadtree_min_size,
@@ -510,6 +518,16 @@ class PlotEngine:
             self.params.pixel_sort_lower_thresh,
             self.params.pixel_sort_upper_thresh,
             self.params.pixel_sort_reverse,
+            self.params.use_fft,
+            self.params.fft_mode,
+            self.params.fft_frequency,
+            self.params.fft_bandwidth,
+            self.params.fft_strength,
+            self.params.use_ca,
+            self.params.ca_states,
+            self.params.ca_iterations,
+            self.params.ca_threshold,
+            self.params.ca_strength,
         )
 
         if filter_cache_key in _PREPROCESS_CACHE:
@@ -531,11 +549,40 @@ class PlotEngine:
 
             update_progress(0.15, "Vorverarbeitung (Filter & Kontrast)...")
 
-            # 2. Preprocessing: Kuwahara Filter (Ölgemälde)
+            # 2. Preprocessing: Kuwahara Filter (Ölgemälde, Standard oder Anisotrop)
             if self.params.use_kuwahara and self.params.kuwahara_radius >= 1:
-                norm_gray = apply_kuwahara(norm_gray, radius=self.params.kuwahara_radius)
+                if self.params.kuwahara_mode == "anisotropic":
+                    norm_gray = apply_anisotropic_kuwahara(
+                        norm_gray,
+                        radius=self.params.kuwahara_radius,
+                        is_cancelled=is_cancelled,
+                    )
+                else:
+                    norm_gray = apply_kuwahara(norm_gray, radius=self.params.kuwahara_radius)
 
-            # 3. Preprocessing: Pixel Sorting (Glitch-Art)
+            # 3. Preprocessing: 2D-FFT Frequenzraum-Manipulation (Moiré / Interferenz)
+            if self.params.use_fft:
+                norm_gray = apply_fft_filter(
+                    norm_gray,
+                    mode=self.params.fft_mode,
+                    frequency=self.params.fft_frequency,
+                    bandwidth=self.params.fft_bandwidth,
+                    strength=self.params.fft_strength,
+                    is_cancelled=is_cancelled,
+                )
+
+            # 4. Preprocessing: Cyclic Cellular Automata (Kristalline Texturen)
+            if self.params.use_ca:
+                norm_gray = apply_cyclic_ca(
+                    norm_gray,
+                    num_states=self.params.ca_states,
+                    iterations=self.params.ca_iterations,
+                    threshold=self.params.ca_threshold,
+                    strength=self.params.ca_strength,
+                    is_cancelled=is_cancelled,
+                )
+
+            # 5. Preprocessing: Pixel Sorting (Glitch-Art)
             if self.params.use_pixel_sort:
                 norm_gray = apply_pixel_sort(
                     norm_gray,
@@ -546,7 +593,7 @@ class PlotEngine:
                     is_cancelled=is_cancelled,
                 )
 
-            # 4. Preprocessing: Quadtree Decomposition (Block-Abstraktion)
+            # 6. Preprocessing: Quadtree Decomposition (Block-Abstraktion)
             quadtree_boxes: List[StrokePath] = []
             if self.params.use_quadtree:
                 norm_gray, quadtree_boxes = apply_quadtree_decomposition(
@@ -785,6 +832,43 @@ class PlotEngine:
                     curvature=self.params.sbr_curvature,
                     step_size=2.0,
                     align_mode=self.params.sbr_align_mode,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "isocontours":
+                artistic_paths = generate_isocontours(
+                    gray_image=norm_gray,
+                    num_levels=self.params.iso_levels,
+                    min_level=self.params.iso_min_level,
+                    max_level=self.params.iso_max_level,
+                    smoothing_sigma=self.params.iso_smoothing,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "physarum":
+                artistic_paths = generate_physarum_art(
+                    gray_image=norm_gray,
+                    num_agents=self.params.physarum_agents,
+                    iterations=self.params.physarum_iterations,
+                    sim_resolution=self.params.physarum_sim_res,
+                    decay_factor=self.params.physarum_decay,
+                    sensor_angle_deg=self.params.physarum_sensor_angle,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "string_art":
+                artistic_paths = generate_string_art(
+                    gray_image=norm_gray,
+                    num_pins=self.params.string_pins,
+                    max_strings=self.params.string_max_lines,
+                    string_weight=self.params.string_weight,
+                    pin_shape=self.params.string_shape,
+                    is_cancelled=is_cancelled,
+                )
+            elif art_mode == "diffgrowth":
+                artistic_paths = generate_diffgrowth_art(
+                    gray_image=norm_gray,
+                    iterations=self.params.diffgrowth_iterations,
+                    max_nodes=self.params.diffgrowth_max_nodes,
+                    collision_radius=self.params.diffgrowth_collision_r,
+                    split_dist=self.params.diffgrowth_split_dist,
                     is_cancelled=is_cancelled,
                 )
 
