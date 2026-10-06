@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self.sidebar.sig_export_svg_requested.connect(self.export_svg_file)
         self.sidebar.sig_export_png_requested.connect(self.export_png_file)
         self.sidebar.sig_input_file_selected.connect(self.load_image)
+        self.sidebar.sig_open_preset_lab.connect(self.open_preset_lab)
 
     def _build_menus(self) -> None:
         menubar = self.menuBar()
@@ -173,6 +174,14 @@ class MainWindow(QMainWindow):
         self.preview.chk_keep_zoom.toggled.connect(self.act_keep_zoom.setChecked)
         menu_view.addAction(self.act_keep_zoom)
 
+        # Menu: Werkzeuge
+        menu_tools = menubar.addMenu("Werkzeuge")
+        act_preset_lab = QAction("Preset-Labor / Stil-Entdecker...", self)
+        act_preset_lab.setShortcut(QKeySequence("Ctrl+L"))
+        act_preset_lab.setToolTip("Batch-Zufallsvarianten auf dem Quellbild ausprobieren und als Presets speichern (Strg+L)")
+        act_preset_lab.triggered.connect(self.open_preset_lab)
+        menu_tools.addAction(act_preset_lab)
+
         # Menu: Hilfe
         menu_help = menubar.addMenu("Hilfe")
         act_about = QAction("Über img2plot", self)
@@ -192,6 +201,13 @@ class MainWindow(QMainWindow):
         act_calc.setToolTip("Vorschau sofort neu berechnen")
         act_calc.triggered.connect(self._on_manual_recalculate)
         toolbar.addAction(act_calc)
+
+        toolbar.addSeparator()
+
+        act_lab = QAction("🔬 Preset-Labor", self)
+        act_lab.setToolTip("Preset-Labor / Stil-Entdecker öffnen (Strg+L)")
+        act_lab.triggered.connect(self.open_preset_lab)
+        toolbar.addAction(act_lab)
 
         toolbar.addSeparator()
 
@@ -497,10 +513,37 @@ class MainWindow(QMainWindow):
             "<li>Vollbild- (F11) und Fenstermodus</li>"
             "<li>Vordefinierte und benutzerdefinierte Presets (JSON)</li>"
             "<li>SVG- und PNG-Export mit Maßstabs- und Randoptionen</li>"
+            "<li>Preset-Labor zur interaktiven Entdeckung neuer Stile</li>"
             "</ul>",
         )
 
+    def open_preset_lab(self) -> None:
+        """Open the Preset Laboratory / Style Discovery window."""
+        from .preset_lab import PresetLabWindow
+
+        if not hasattr(self, "_preset_lab_win") or self._preset_lab_win is None:
+            self._preset_lab_win = PresetLabWindow(
+                initial_image_path=self.current_image_path,
+                parent=None,
+            )
+            self._preset_lab_win.sig_presets_saved.connect(self._on_presets_saved_from_lab)
+        else:
+            if self.current_image_path and os.path.isfile(self.current_image_path):
+                self._preset_lab_win.set_source_image(self.current_image_path)
+
+        self._preset_lab_win.show()
+        self._preset_lab_win.raise_()
+        self._preset_lab_win.activateWindow()
+
+    def _on_presets_saved_from_lab(self) -> None:
+        """Refresh presets in sidebar when saved in Preset-Labor."""
+        if hasattr(self.sidebar, "_refresh_presets_dropdown"):
+            self.sidebar._refresh_presets_dropdown()
+        self.statusBar().showMessage("Neue Vorlagen aus dem Preset-Labor wurden geladen.", 4000)
+
     def closeEvent(self, event) -> None:
+        if hasattr(self, "_preset_lab_win") and self._preset_lab_win is not None:
+            self._preset_lab_win.close()
         if hasattr(self, "worker") and self.worker.isRunning():
             self.worker.stop()
         super().closeEvent(event)
