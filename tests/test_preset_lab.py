@@ -4,8 +4,10 @@ Tests for Preset Laboratory and Randomizer components.
 
 import os
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QRect
+from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QStyleOptionViewItem, QWidget
 
 from img2plot.core.parameters import PlotParameters
 from img2plot.core.engine import EngineResult, StrokePath
@@ -16,9 +18,13 @@ from img2plot.core.randomizer import (
 )
 from img2plot.core.presets import get_all_presets, delete_user_preset
 from img2plot.gui.preset_lab import (
+    FAVORITE_ROLE,
+    GalleryItem,
+    PresetCardDelegate,
+    PresetGalleryModel,
     PresetLabWindow,
-    PresetCardWidget,
     PresetSaveDialog,
+    render_result_to_image,
     render_result_to_pixmap,
 )
 
@@ -104,38 +110,42 @@ def test_render_result_to_pixmap():
     assert pixmap.width() == 200
     assert pixmap.height() == 200
 
+    # Worker-thread variant must return a QImage (QPixmap is GUI-thread only)
+    image = render_result_to_image(result, stroke_color="#1e3a8a", target_size=200)
+    assert isinstance(image, QImage)
+    assert image.size().width() == 200
 
-def test_preset_card_widget(qapp):
-    """Test PresetCardWidget favorite toggling and appearance."""
+
+def test_gallery_model_favorites():
+    """Test PresetGalleryModel favorite toggling and bulk selection."""
     dummy_pixmap = QPixmap(100, 100)
     dummy_pixmap.fill(Qt.GlobalColor.white)
-    params = PlotParameters(artistic_mode="voronoi")
+    model = PresetGalleryModel()
+    for i in range(3):
+        model.append_item(GalleryItem(i, PlotParameters(artistic_mode="voronoi"), dummy_pixmap, f"Test {i}"))
 
-    card = PresetCardWidget(
-        index=0,
-        params=params,
-        pixmap=dummy_pixmap,
-        suggested_name="Test Voronoi",
-    )
+    assert model.rowCount() == 3
+    assert model.favorite_count() == 0
 
-    assert not card.is_favorite
-    assert "🤍" in card.btn_fav.text()
+    changes = []
+    model.dataChanged.connect(lambda tl, br, roles: changes.append((tl.row(), br.row())))
 
-    # Toggle favorite
-    events_received = []
-    card.sig_favorite_toggled.connect(lambda idx, fav: events_received.append((idx, fav)))
+    idx = model.index(1)
+    assert model.setData(idx, True, FAVORITE_ROLE)
+    assert idx.data(FAVORITE_ROLE) is True
+    assert model.favorite_count() == 1
+    assert [it.suggested_name for it in model.favorite_items()] == ["Test 1"]
+    assert changes == [(1, 1)]
 
-    card._toggle_favorite()
-    assert card.is_favorite
-    assert "❤️" in card.btn_fav.text()
-    assert len(events_received) == 1
-    assert events_received[0] == (0, True)
+    model.set_all_favorites(True)
+    assert model.favorite_count() == 3
+    assert changes[-1] == (0, 2)  # one signal for the whole range
 
-    # Untoggle
-    card._toggle_favorite()
-    assert not card.is_favorite
-    assert len(events_received) == 2
-    assert events_received[1] == (0, False)
+    model.set_all_favorites(False)
+    assert model.favorite_count() == 0
+
+    model.clear()
+    assert model.rowCount() == 0
 
 
 def test_preset_lab_window_and_selection(qapp):
@@ -167,26 +177,30 @@ def test_preset_lab_window_and_selection(qapp):
 
     win._on_item_ready(0, PlotParameters(artistic_mode="spiral"), dummy_pixmap)
     win._on_item_ready(1, PlotParameters(artistic_mode="waveform"), dummy_pixmap)
-    assert len(win.card_widgets) == 2
+    assert win.model.rowCount() == 2
 
     # Select all / Unselect all
     win.select_all_cards()
-    assert all(c.is_favorite for c in win.card_widgets)
+    assert win.model.favorite_count() == 2
     assert win.btn_save_favs.isEnabled()
+    assert "2 von 2" in win.lbl_fav_counter.text()
 
     win.unselect_all_cards()
-    assert not any(c.is_favorite for c in win.card_widgets)
+    assert win.model.favorite_count() == 0
     assert not win.btn_save_favs.isEnabled()
 
     # Filter toggles
-    win.card_widgets[0].set_favorite(True)
+    win.model.setData(win.model.index(0), True, FAVORITE_ROLE)
     win._filter_favs_clicked()
-    assert win.card_widgets[0].isVisible()
-    assert not win.card_widgets[1].isVisible()
+    assert win.proxy.rowCount() == 1
+    assert win.proxy.index(0, 0).data(FAVORITE_ROLE) is True
+
+    # Un-favoriting while filtered hides the card immediately
+    win.model.setData(win.model.index(0), False, FAVORITE_ROLE)
+    assert win.proxy.rowCount() == 0
 
     win._filter_all_clicked()
-    assert win.card_widgets[0].isVisible()
-    assert win.card_widgets[1].isVisible()
+    assert win.proxy.rowCount() == 2
 
     win.close()
 
@@ -233,37 +247,98 @@ def test_preset_save_dialog_and_persistence(qapp, tmp_path, monkeypatch):
 
 
 def test_preset_lab_dynamic_grid_and_card_scaling(qapp):
-    """Test dynamic column layout, card size slider, and AspectImageLabel scaling."""
+    """Test dynamic column layout, card size slider and delegate painting."""
     win = PresetLabWindow()
     win.resize(1600, 900)
+    win.show()
+    qapp.processEvents()
 
     dummy_pixmap = QPixmap(300, 300)
     dummy_pixmap.fill(Qt.GlobalColor.white)
-
-    # Add 6 cards
     for i in range(6):
         win._on_item_ready(i, PlotParameters(artistic_mode="spiral"), dummy_pixmap)
+    assert win.model.rowCount() == 6
 
-    assert len(win.card_widgets) == 6
-
-    # Test AspectImageLabel
-    card = win.card_widgets[0]
-    assert hasattr(card, "lbl_image")
-    assert card.lbl_image.pixmap() is not None
-    assert not card.lbl_image.pixmap().isNull()
-
-    # Change card size slider
+    view = win.gallery_view
     assert win.slider_card_size.minimum() == 200
     assert win.slider_card_size.maximum() == 520
+
+    win.slider_card_size.setValue(280)
+    cols_small = view.columns
     win.slider_card_size.setValue(450)
     assert win.card_target_width == 450
     assert "450 px" in win.lbl_card_size_val.text()
+    cols_large = view.columns
+    assert 1 <= cols_large < cols_small
 
-    # Relayout grid check
-    win._relayout_grid()
-    assert win._current_cols >= 1
-    # Check that column stretch is set
-    for c in range(win._current_cols):
-        assert win.grid_layout.columnStretch(c) == 1
+    # Cards fill the row without wrapping early: the last column sits in the first row
+    win.slider_card_size.setValue(200)
+    first = view.visualRect(win.proxy.index(0, 0))
+    last_in_row = view.visualRect(win.proxy.index(min(view.columns, 6) - 1, 0))
+    assert last_in_row.top() == first.top()
+    assert last_in_row.right() <= view.viewport().width()
+    card = view.card_delegate.card_size
+    assert card.height() == PresetCardDelegate.card_height_for_width(card.width())
+
+    # Painting a card must not raise
+    img = QImage(card.width(), card.height(), QImage.Format.Format_ARGB32_Premultiplied)
+    painter = QPainter(img)
+    opt = QStyleOptionViewItem()
+    opt.rect = QRect(0, 0, card.width(), card.height())
+    opt.font = view.font()
+    view.card_delegate.paint(painter, opt, win.proxy.index(0, 0))
+    painter.end()
+
+    win.close()
+
+
+def test_preset_lab_click_favorite_on_card(qapp):
+    """Clicking the 'Merken' area of a painted card toggles the favorite."""
+    win = PresetLabWindow()
+    win.resize(1280, 840)
+    win.show()
+    qapp.processEvents()
+
+    dummy_pixmap = QPixmap(100, 100)
+    dummy_pixmap.fill(Qt.GlobalColor.white)
+    win._on_item_ready(0, PlotParameters(artistic_mode="spiral"), dummy_pixmap)
+    qapp.processEvents()
+
+    view = win.gallery_view
+    idx = win.proxy.index(0, 0)
+    fav_rect = PresetCardDelegate.card_rects(view.visualRect(idx)).fav
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=fav_rect.center())
+    assert win.model.favorite_count() == 1
+    assert win.btn_save_favs.isEnabled()
+
+    win.close()
+
+
+def test_preset_lab_gallery_scales_to_1000_variants(qapp):
+    """Regression: 1000 variants must not create per-card widgets and must stay reachable."""
+    win = PresetLabWindow()
+    win.resize(1280, 840)
+    win.show()
+    qapp.processEvents()
+
+    widgets_before = len(win.findChildren(QWidget))
+
+    image = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)  # small: keeps the test light
+    image.fill(Qt.GlobalColor.white)
+    for i in range(1000):
+        win._on_item_ready(i, PlotParameters(artistic_mode="spiral"), image)
+    win._on_worker_finished()
+    qapp.processEvents()
+
+    assert win.model.rowCount() == 1000
+    assert "1000 Varianten" in win.lbl_status.text()
+    assert len(win.findChildren(QWidget)) == widgets_before
+
+    view = win.gallery_view
+    view.scrollToBottom()
+    qapp.processEvents()
+    last_rect = view.visualRect(win.proxy.index(999, 0))
+    assert last_rect.isValid()
+    assert view.viewport().rect().intersects(last_rect)
 
     win.close()

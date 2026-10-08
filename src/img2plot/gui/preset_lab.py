@@ -9,54 +9,66 @@ from __future__ import annotations
 import math
 import os
 import sys
-from typing import List, Optional, Dict, Any
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any, NamedTuple
 
-from PySide6.QtCore import Qt, QThread, Signal, QRectF, QSize, QPoint, QEvent
+from PySide6.QtCore import (
+    Qt,
+    QThread,
+    Signal,
+    QRect,
+    QRectF,
+    QSize,
+    QEvent,
+    QAbstractListModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QSortFilterProxyModel,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
     QFont,
+    QFontMetrics,
     QImage,
     QKeySequence,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
-    QIcon,
+    QPixmapCache,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
-    QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSlider,
     QSpinBox,
-    QSplitter,
-    QStatusBar,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from ..core.engine import PlotEngine, EngineResult, StrokePath
+from ..core.engine import PlotEngine, EngineResult
 from ..core.parameters import PlotParameters
 from ..core.presets import save_user_preset
 from ..core.randomizer import (
-    ARTISTIC_MODES,
     NON_CLASSIC_ARTISTIC_MODES,
     generate_random_parameters,
     suggest_preset_name,
@@ -64,18 +76,21 @@ from ..core.randomizer import (
 from .theme import DARK_STYLESHEET
 
 
-def render_result_to_pixmap(
+def render_result_to_image(
     result: EngineResult,
     stroke_color: str = "#18181b",
     target_size: int = 480,
     bg_color: str = "#ffffff",
-) -> QPixmap:
-    """Render EngineResult vector paths into a crisp anti-aliased thumbnail pixmap."""
+) -> QImage:
+    """Render EngineResult vector paths into a crisp anti-aliased thumbnail image.
+
+    Returns a QImage (not a QPixmap) so it can safely be produced in a worker thread.
+    """
     w, h = result.width, result.height
     if w <= 0 or h <= 0:
         empty = QImage(target_size, target_size, QImage.Format.Format_ARGB32_Premultiplied)
         empty.fill(QColor(bg_color))
-        return QPixmap.fromImage(empty)
+        return empty
 
     scale = min((target_size - 16) / float(w), (target_size - 16) / float(h))
     pix_w = max(1, int(round(w * scale)))
@@ -125,7 +140,17 @@ def render_result_to_pixmap(
     painter.drawPath(v_path)
     painter.end()
 
-    return QPixmap.fromImage(img)
+    return img
+
+
+def render_result_to_pixmap(
+    result: EngineResult,
+    stroke_color: str = "#18181b",
+    target_size: int = 480,
+    bg_color: str = "#ffffff",
+) -> QPixmap:
+    """GUI-thread convenience wrapper around render_result_to_image()."""
+    return QPixmap.fromImage(render_result_to_image(result, stroke_color, target_size, bg_color))
 
 
 # -----------------------------------------------------------------------------
@@ -136,7 +161,7 @@ class PresetLabWorker(QThread):
     """Background worker for batch-rendering randomized preset variations."""
 
     sig_progress = Signal(int, int, str)  # current, total, status_message
-    sig_item_ready = Signal(int, object, object)  # index, PlotParameters, QPixmap
+    sig_item_ready = Signal(int, object, object)  # index, PlotParameters, QImage
     sig_finished = Signal()
     sig_error = Signal(int, str)  # index, error_msg
 
@@ -180,8 +205,9 @@ class PresetLabWorker(QThread):
                     break
 
                 color = params.stroke_color if params.stroke_color else "#18181b"
-                pixmap = render_result_to_pixmap(result, stroke_color=color, target_size=480)
-                self.sig_item_ready.emit(idx, params, pixmap)
+                # QImage only: QPixmap must not be created outside the GUI thread.
+                image = render_result_to_image(result, stroke_color=color, target_size=480)
+                self.sig_item_ready.emit(idx, params, image)
 
             except Exception as e:
                 self.sig_error.emit(idx, str(e))
@@ -251,188 +277,382 @@ class ZoomModalDialog(QDialog):
 
 
 # -----------------------------------------------------------------------------
-# Card Widget
+# Virtualized Gallery (Model / Delegate / View)
+#
+# The gallery used to create one QFrame card with six child widgets and their own
+# style sheets per variant. With 1000 variants that meant ~6000 widgets in a
+# QGridLayout that was completely re-filled on every resize. The model/view
+# version below keeps the data in a list model and only paints the cards that are
+# currently visible, so the cost of a repaint no longer depends on the batch size.
 # -----------------------------------------------------------------------------
 
-class AspectImageLabel(QLabel):
-    """Responsive image container that smoothly scales master pixmap on resize without layout bloat."""
+FAVORITE_ROLE = Qt.ItemDataRole.UserRole + 1
+PARAMS_ROLE = Qt.ItemDataRole.UserRole + 2
+NAME_ROLE = Qt.ItemDataRole.UserRole + 3
+INDEX_ROLE = Qt.ItemDataRole.UserRole + 4
 
-    sig_clicked = Signal()
 
-    def __init__(self, master_pixmap: QPixmap, parent: Optional[QWidget] = None):
+@dataclass
+class GalleryItem:
+    """One generated variant shown in the gallery."""
+
+    index: int
+    params: PlotParameters
+    pixmap: QPixmap
+    suggested_name: str
+    is_favorite: bool = False
+
+
+def _style_label(params: PlotParameters) -> str:
+    return params.artistic_mode.upper() if params.artistic_mode != "none" else "KONTUR"
+
+
+class PresetGalleryModel(QAbstractListModel):
+    """List model holding all generated variants of the current batch."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.master_pixmap = master_pixmap
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background-color: #ffffff; border-radius: 6px;")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumSize(120, 120)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._update_scaled_pixmap()
+        self._items: List[GalleryItem] = []
 
-    def sizeHint(self) -> QSize:
-        return QSize(240, 220)
+    # --- Qt model API ---------------------------------------------------------
 
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.sig_clicked.emit()
-        super().mousePressEvent(event)
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._items)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._update_scaled_pixmap()
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if not index.isValid() or not (0 <= index.row() < len(self._items)):
+            return None
+        item = self._items[index.row()]
+        if role in (Qt.ItemDataRole.DisplayRole, NAME_ROLE):
+            return item.suggested_name
+        if role == Qt.ItemDataRole.DecorationRole:
+            return item.pixmap
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{item.suggested_name}\nStil: {_style_label(item.params)}\nKlick aufs Bild: Großansicht"
+        if role == FAVORITE_ROLE:
+            return item.is_favorite
+        if role == PARAMS_ROLE:
+            return item.params
+        if role == INDEX_ROLE:
+            return item.index
+        return None
 
-    def _update_scaled_pixmap(self) -> None:
-        if self.master_pixmap.isNull():
+    def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role != FAVORITE_ROLE or not index.isValid():
+            return False
+        item = self._items[index.row()]
+        fav = bool(value)
+        if item.is_favorite == fav:
+            return True
+        item.is_favorite = fav
+        self.dataChanged.emit(index, index, [FAVORITE_ROLE])
+        return True
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    # --- Convenience API ------------------------------------------------------
+
+    def append_item(self, item: GalleryItem) -> None:
+        row = len(self._items)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._items.append(item)
+        self.endInsertRows()
+
+    def clear(self) -> None:
+        self.beginResetModel()
+        self._items.clear()
+        self.endResetModel()
+
+    def item_at(self, row: int) -> GalleryItem:
+        return self._items[row]
+
+    def set_all_favorites(self, fav: bool) -> None:
+        if not self._items:
             return
-        target_w = max(40, self.width() - 8)
-        target_h = max(40, self.height() - 8)
-        scaled = self.master_pixmap.scaled(
-            target_w,
-            target_h,
+        for item in self._items:
+            item.is_favorite = fav
+        # One signal for the whole range instead of one repaint per card.
+        self.dataChanged.emit(self.index(0), self.index(len(self._items) - 1), [FAVORITE_ROLE])
+
+    def favorite_items(self) -> List[GalleryItem]:
+        return [it for it in self._items if it.is_favorite]
+
+    def favorite_count(self) -> int:
+        return sum(1 for it in self._items if it.is_favorite)
+
+
+class FavoritesFilterProxy(QSortFilterProxyModel):
+    """Optionally hides all variants that are not marked as favorite."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._favorites_only = False
+        self.setDynamicSortFilter(True)  # re-filter automatically when a favorite flips
+
+    @property
+    def favorites_only(self) -> bool:
+        return self._favorites_only
+
+    def set_favorites_only(self, enabled: bool) -> None:
+        if enabled == self._favorites_only:
+            return
+        self._favorites_only = enabled
+        self.invalidateRowsFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not self._favorites_only:
+            return True
+        src = self.sourceModel().index(source_row, 0, source_parent)
+        return bool(src.data(FAVORITE_ROLE))
+
+
+class _CardRects(NamedTuple):
+    card: QRect
+    image: QRect
+    meta: QRect
+    zoom: QRect
+    name: QRect
+    fav: QRect
+
+
+class PresetCardDelegate(QStyledItemDelegate):
+    """Paints a gallery card and handles clicks on its favorite / zoom areas."""
+
+    sig_zoom_requested = Signal(object)  # QPersistentModelIndex
+
+    TOP_GAP = 7  # half the grid spacing, so the first row doesn't touch the frame
+    PAD = 10
+    GAP = 6
+    META_H = 22
+    NAME_H = 20
+    BTN_H = 28
+    ZOOM_W = 28
+    # Height of everything below the square image area.
+    CHROME_H = META_H + NAME_H + BTN_H + 3 * GAP
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.card_size = QSize(280, 280 + self.CHROME_H)
+
+    @classmethod
+    def card_height_for_width(cls, width: int) -> int:
+        # Image area is square: (width - 2*PAD) wide, (height - TOP_GAP - 2*PAD - CHROME_H) high.
+        return width + cls.CHROME_H + cls.TOP_GAP
+
+    @classmethod
+    def card_rects(cls, rect: QRect) -> _CardRects:
+        rect = rect.adjusted(0, cls.TOP_GAP, 0, 0)
+        inner = rect.adjusted(cls.PAD, cls.PAD, -cls.PAD, -cls.PAD)
+        img_h = max(40, inner.height() - cls.CHROME_H)
+        image = QRect(inner.left(), inner.top(), inner.width(), img_h)
+        meta_top = image.bottom() + 1 + cls.GAP
+        meta = QRect(inner.left(), meta_top, inner.width() - cls.ZOOM_W - cls.GAP, cls.META_H)
+        zoom = QRect(inner.right() - cls.ZOOM_W + 1, meta_top, cls.ZOOM_W, cls.META_H)
+        name = QRect(inner.left(), meta_top + cls.META_H + cls.GAP, inner.width(), cls.NAME_H)
+        fav = QRect(inner.left(), name.bottom() + 1 + cls.GAP, inner.width(), cls.BTN_H)
+        return _CardRects(rect, image, meta, zoom, name, fav)
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        return QSize(self.card_size)
+
+    @staticmethod
+    def _scaled_pixmap(pixmap: QPixmap, size: QSize) -> QPixmap:
+        """Smoothly scaled thumbnail, cached so scrolling doesn't rescale every frame."""
+        key = f"img2plot-lab:{pixmap.cacheKey()}:{size.width()}x{size.height()}"
+        cached = QPixmapCache.find(key)
+        if cached is not None and not cached.isNull():
+            return cached
+        scaled = pixmap.scaled(
+            size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self.setPixmap(scaled)
+        QPixmapCache.insert(key, scaled)
+        return scaled
 
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        r = self.card_rects(option.rect)
+        is_fav = bool(index.data(FAVORITE_ROLE))
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        has_focus = bool(option.state & QStyle.StateFlag.State_HasFocus)
+        params: PlotParameters = index.data(PARAMS_ROLE)
 
-class PresetCardWidget(QFrame):
-    """Gallery card displaying a single randomized result with favorite toggle and zoom."""
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    sig_favorite_toggled = Signal(int, bool)  # index, is_favorite
-
-    def __init__(
-        self,
-        index: int,
-        params: PlotParameters,
-        pixmap: QPixmap,
-        suggested_name: str,
-        parent: Optional[QWidget] = None,
-    ):
-        super().__init__(parent)
-        self.index = index
-        self.params = params
-        self.pixmap = pixmap
-        self.suggested_name = suggested_name
-        self.is_favorite = False
-
-        self.setMinimumSize(220, 280)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._setup_ui()
-        self._update_appearance()
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
-
-        # Responsive Aspect Image Label
-        self.lbl_image = AspectImageLabel(self.pixmap, parent=self)
-        self.lbl_image.sig_clicked.connect(self._on_zoom_clicked)
-        layout.addWidget(self.lbl_image, 1)
-
-        # Meta row: Style badge & zoom button
-        meta_row = QHBoxLayout()
-        meta_row.setSpacing(6)
-
-        style_title = self.params.artistic_mode.upper() if self.params.artistic_mode != "none" else "KONTUR"
-        self.lbl_badge = QLabel(f"  {style_title}  ")
-        self.lbl_badge.setStyleSheet(
-            "background-color: #27272a; color: #38bdf8; font-size: 11px; font-weight: bold; border-radius: 4px; padding: 2px;"
-        )
-        meta_row.addWidget(self.lbl_badge)
-
-        meta_row.addStretch()
-
-        self.btn_zoom = QPushButton("🔍")
-        self.btn_zoom.setFixedSize(28, 24)
-        self.btn_zoom.setToolTip("Großansicht anzeigen")
-        self.btn_zoom.clicked.connect(self._on_zoom_clicked)
-        meta_row.addWidget(self.btn_zoom)
-
-        layout.addLayout(meta_row)
-
-        # Title / Suggested Name
-        self.lbl_name = QLabel(self.suggested_name)
-        self.lbl_name.setStyleSheet("font-weight: bold; color: #f4f4f5; font-size: 13px;")
-        self.lbl_name.setWordWrap(True)
-        self.lbl_name.setFixedHeight(22)
-        layout.addWidget(self.lbl_name)
-
-        # Bottom row: Favorite Button
-        btn_row = QHBoxLayout()
-        self.btn_fav = QPushButton("🤍  Merken")
-        self.btn_fav.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_fav.clicked.connect(self._toggle_favorite)
-        btn_row.addWidget(self.btn_fav)
-        layout.addLayout(btn_row)
-
-    def _toggle_favorite(self) -> None:
-        self.set_favorite(not self.is_favorite)
-        self.sig_favorite_toggled.emit(self.index, self.is_favorite)
-
-    def set_favorite(self, fav: bool) -> None:
-        self.is_favorite = fav
-        self._update_appearance()
-
-    def _update_appearance(self) -> None:
-        if self.is_favorite:
-            self.setStyleSheet(
-                """
-                PresetCardWidget {
-                    background-color: #1e293b;
-                    border: 2px solid #38bdf8;
-                    border-radius: 10px;
-                }
-                """
-            )
-            self.btn_fav.setText("❤️  Gemerkt")
-            self.btn_fav.setStyleSheet(
-                """
-                QPushButton {
-                    background-color: #0284c7;
-                    color: #ffffff;
-                    font-weight: bold;
-                    border-radius: 6px;
-                    padding: 4px 10px;
-                }
-                QPushButton:hover {
-                    background-color: #0369a1;
-                }
-                """
-            )
+        # Card background + border
+        if is_fav:
+            bg, border, border_w = QColor("#1e293b"), QColor("#38bdf8"), 2.0
         else:
-            self.setStyleSheet(
-                """
-                PresetCardWidget {
-                    background-color: #18181b;
-                    border: 1px solid #27272a;
-                    border-radius: 10px;
-                }
-                PresetCardWidget:hover {
-                    border: 1px solid #52525b;
-                }
-                """
-            )
-            self.btn_fav.setText("🤍  Merken")
-            self.btn_fav.setStyleSheet(
-                """
-                QPushButton {
-                    background-color: #27272a;
-                    color: #e4e4e7;
-                    border: 1px solid #3f3f46;
-                    border-radius: 6px;
-                    padding: 4px 10px;
-                }
-                QPushButton:hover {
-                    background-color: #3f3f46;
-                    color: #ffffff;
-                }
-                """
-            )
+            bg = QColor("#18181b")
+            border = QColor("#52525b") if hovered else QColor("#27272a")
+            border_w = 1.0
+        if has_focus:
+            border, border_w = QColor("#7dd3fc"), 2.0
+        painter.setPen(QPen(border, border_w))
+        painter.setBrush(bg)
+        painter.drawRoundedRect(QRectF(r.card).adjusted(1, 1, -1, -1), 10, 10)
 
-    def _on_zoom_clicked(self) -> None:
-        dlg = ZoomModalDialog(self.pixmap, self.params, self.suggested_name, parent=self)
-        dlg.exec()
+        # Image area (white plotter paper) + thumbnail
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(QRectF(r.image), 6, 6)
+        pixmap = index.data(Qt.ItemDataRole.DecorationRole)
+        if isinstance(pixmap, QPixmap) and not pixmap.isNull():
+            target = r.image.adjusted(4, 4, -4, -4)
+            scaled = self._scaled_pixmap(pixmap, target.size())
+            x = target.left() + (target.width() - scaled.width()) // 2
+            y = target.top() + (target.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
+
+        # Style badge
+        base_font = QFont(option.font)
+        badge_font = QFont(base_font)
+        badge_font.setPixelSize(11)
+        badge_font.setBold(True)
+        painter.setFont(badge_font)
+        badge_text = _style_label(params) if params is not None else ""
+        fm = QFontMetrics(badge_font)
+        badge_text = fm.elidedText(badge_text, Qt.TextElideMode.ElideRight, r.meta.width() - 12)
+        badge_rect = QRect(r.meta.left(), r.meta.top(), fm.horizontalAdvance(badge_text) + 12, r.meta.height())
+        painter.setBrush(QColor("#27272a"))
+        painter.drawRoundedRect(QRectF(badge_rect), 4, 4)
+        painter.setPen(QColor("#38bdf8"))
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+
+        # Zoom button
+        painter.setPen(QPen(QColor("#3f3f46"), 1.0))
+        painter.setBrush(QColor("#27272a"))
+        painter.drawRoundedRect(QRectF(r.zoom), 4, 4)
+        painter.setFont(base_font)
+        painter.setPen(QColor("#e4e4e7"))
+        painter.drawText(r.zoom, Qt.AlignmentFlag.AlignCenter, "🔍")
+
+        # Suggested name
+        name_font = QFont(base_font)
+        name_font.setPixelSize(13)
+        name_font.setBold(True)
+        painter.setFont(name_font)
+        painter.setPen(QColor("#f4f4f5"))
+        name = QFontMetrics(name_font).elidedText(
+            str(index.data(NAME_ROLE) or ""), Qt.TextElideMode.ElideRight, r.name.width()
+        )
+        painter.drawText(r.name, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+
+        # Favorite button
+        if is_fav:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#0284c7"))
+            fav_text, fav_color = "❤️  Gemerkt", QColor("#ffffff")
+        else:
+            painter.setPen(QPen(QColor("#3f3f46"), 1.0))
+            painter.setBrush(QColor("#3f3f46") if hovered else QColor("#27272a"))
+            fav_text, fav_color = "🤍  Merken", QColor("#e4e4e7")
+        painter.drawRoundedRect(QRectF(r.fav), 6, 6)
+        btn_font = QFont(base_font)
+        btn_font.setBold(is_fav)
+        painter.setFont(btn_font)
+        painter.setPen(fav_color)
+        painter.drawText(r.fav, Qt.AlignmentFlag.AlignCenter, fav_text)
+
+        painter.restore()
+
+    def editorEvent(self, event, model, option: QStyleOptionViewItem, index: QModelIndex) -> bool:
+        if (
+            event.type() in (QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick)
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            r = self.card_rects(option.rect)
+            pos = event.position().toPoint()
+            if r.fav.contains(pos):
+                # A fast 2nd click arrives as DblClick instead of a release: toggle on both.
+                model.setData(index, not bool(index.data(FAVORITE_ROLE)), FAVORITE_ROLE)
+                return True
+            if event.type() == QEvent.Type.MouseButtonRelease and (
+                r.zoom.contains(pos) or r.image.contains(pos)
+            ):
+                self.sig_zoom_requested.emit(QPersistentModelIndex(index))
+                return True
+        return super().editorEvent(event, model, option, index)
+
+
+class PresetGalleryView(QListView):
+    """Icon-mode list view that sizes its grid so cards fill the full row width."""
+
+    SPACING = 14
+
+    sig_zoom_requested = Signal(object)  # QPersistentModelIndex
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.card_target_width = 280
+        self.columns = 1
+
+        self.card_delegate = PresetCardDelegate(self)
+        self.card_delegate.sig_zoom_requested.connect(self.sig_zoom_requested)
+        self.setItemDelegate(self.card_delegate)
+
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setWrapping(True)
+        self.setMovement(QListView.Movement.Static)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setSpacing(0)  # spacing is part of the grid cell, see _update_grid()
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.verticalScrollBar().setSingleStep(32)
+        # Always-on scrollbar: avoids grid-width <-> scrollbar visibility oscillation.
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setMouseTracking(True)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setAccessibleName("Varianten-Galerie")
+        self.setStyleSheet(
+            "QListView { background-color: #09090b; border: 1px solid #27272a; border-radius: 8px; }"
+        )
+
+    def set_card_target_width(self, width: int) -> None:
+        self.card_target_width = max(120, int(width))
+        self._update_grid()
+
+    def viewportEvent(self, event) -> bool:
+        # React to the viewport's own size (window resize, fullscreen, scrollbar).
+        if event.type() == QEvent.Type.Resize:
+            self._update_grid()
+        return super().viewportEvent(event)
+
+    def _update_grid(self) -> None:
+        if not hasattr(self, "card_delegate"):  # resize during construction
+            return
+        avail = self.viewport().width() - 2  # small safety margin against early wrapping
+        if avail <= 0:
+            return
+        cell_target = self.card_target_width + self.SPACING
+        cols = max(1, avail // cell_target)
+        cell_w = avail // cols
+        card_w = max(120, cell_w - self.SPACING)
+        card_h = PresetCardDelegate.card_height_for_width(card_w)
+        new_card = QSize(card_w, card_h)
+        new_grid = QSize(card_w + self.SPACING, card_h + self.SPACING)
+        self.columns = cols
+        if self.card_delegate.card_size != new_card or self.gridSize() != new_grid:
+            self.card_delegate.card_size = new_card
+            self.setGridSize(new_grid)  # triggers a (cheap, delayed) items layout
+
+    def keyPressEvent(self, event) -> None:
+        idx = self.currentIndex()
+        if idx.isValid():
+            if event.key() == Qt.Key.Key_Space:
+                self.model().setData(idx, not bool(idx.data(FAVORITE_ROLE)), FAVORITE_ROLE)
+                return
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self.sig_zoom_requested.emit(QPersistentModelIndex(idx))
+                return
+        super().keyPressEvent(event)
 
 
 # -----------------------------------------------------------------------------
@@ -613,12 +833,15 @@ class PresetLabWindow(QMainWindow):
         self.resize(1280, 840)
 
         self.current_image_path: str = initial_image_path or ""
-        self.card_widgets: List[PresetCardWidget] = []
-        self.generated_data: List[Dict[str, Any]] = []
         self.worker: Optional[PresetLabWorker] = None
         self.is_fullscreen: bool = False
         self.card_target_width: int = 280
-        self._current_cols: int = 4
+
+        # App-wide cache; room for the scaled thumbnails of a few screens of cards (KB).
+        QPixmapCache.setCacheLimit(max(QPixmapCache.cacheLimit(), 64 * 1024))
+        self.model = PresetGalleryModel(self)
+        self.proxy = FavoritesFilterProxy(self)
+        self.proxy.setSourceModel(self.model)
 
         self._setup_ui()
         self._build_menus()
@@ -806,21 +1029,19 @@ class PresetLabWindow(QMainWindow):
 
         root_layout.addLayout(sub_bar)
 
-        # 4. Scrollable Gallery Grid
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("background-color: #09090b; border: 1px solid #27272a; border-radius: 8px;")
+        # 4. Virtualized gallery (only visible cards are painted)
+        self.gallery_view = PresetGalleryView()
+        self.gallery_view.setModel(self.proxy)
+        self.gallery_view.set_card_target_width(self.card_target_width)
+        # Queued: open the modal dialog after the view has finished its mouse handling.
+        self.gallery_view.sig_zoom_requested.connect(
+            self._open_zoom, Qt.ConnectionType.QueuedConnection
+        )
+        root_layout.addWidget(self.gallery_view, 1)
 
-        self.grid_container = QWidget()
-        self.grid_container.setStyleSheet("background-color: transparent;")
-        self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setContentsMargins(14, 14, 14, 14)
-        self.grid_layout.setSpacing(14)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-
-        self.scroll_area.setWidget(self.grid_container)
-        self.scroll_area.viewport().installEventFilter(self)
-        root_layout.addWidget(self.scroll_area, 1)
+        self.model.dataChanged.connect(self._update_counter)
+        self.model.rowsInserted.connect(self._update_counter)
+        self.model.modelReset.connect(self._update_counter)
 
         # 5. Bottom Action Bar
         bottom_bar = QFrame()
@@ -897,62 +1118,10 @@ class PresetLabWindow(QMainWindow):
             self.showNormal()
             self.act_fullscreen.setChecked(False)
 
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        self._relayout_grid()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._relayout_grid()
-
-    def eventFilter(self, watched, event) -> bool:
-        if hasattr(self, "scroll_area") and watched == self.scroll_area.viewport():
-            if event.type() == QEvent.Type.Resize:
-                self._relayout_grid()
-        return super().eventFilter(watched, event)
-
     def _on_card_size_changed(self, value: int) -> None:
         self.card_target_width = value
         self.lbl_card_size_val.setText(f"{value} px")
-        self._relayout_grid()
-
-    def _relayout_grid(self) -> None:
-        """Dynamically re-arrange cards across columns to fit current viewport width without gaps."""
-        if not hasattr(self, "scroll_area") or not hasattr(self, "grid_layout"):
-            return
-
-        viewport_w = self.scroll_area.viewport().width()
-        if viewport_w <= 100:
-            return
-
-        spacing = self.grid_layout.spacing()
-        margins = self.grid_layout.contentsMargins()
-        effective_w = viewport_w - margins.left() - margins.right() - 20
-
-        card_target_w = getattr(self, "card_target_width", 280)
-        num_cols = max(1, effective_w // (card_target_w + spacing))
-
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            # 1. Clear previous column stretches
-            for c in range(self.grid_layout.columnCount()):
-                self.grid_layout.setColumnStretch(c, 0)
-
-            # 2. Reflow visible cards consecutively without holes
-            visible_cards = [c for c in self.card_widgets if c.isVisible()]
-            for idx, card in enumerate(visible_cards):
-                self.grid_layout.removeWidget(card)
-                r = idx // num_cols
-                c = idx % num_cols
-                self.grid_layout.addWidget(card, r, c)
-
-            # 3. Ensure all columns stretch equally to fill the entire row width
-            for c in range(num_cols):
-                self.grid_layout.setColumnStretch(c, 1)
-
-            self._current_cols = num_cols
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
+        self.gallery_view.set_card_target_width(value)
 
     # -------------------------------------------------------------------------
     # Image Selection & Generation Flow
@@ -985,8 +1154,8 @@ class PresetLabWindow(QMainWindow):
             )
             return
 
-        # Clear existing cards
-        self._clear_cards()
+        # Clear existing variants
+        self.model.clear()
 
         count = self.slider_count.value()
         focus_mode = self.combo_focus.currentData()
@@ -1017,45 +1186,22 @@ class PresetLabWindow(QMainWindow):
         self.progress_bar.setValue(current)
         self.lbl_status.setText(msg)
 
-    def _on_item_ready(self, index: int, params: PlotParameters, pixmap: QPixmap) -> None:
-        suggested_name = suggest_preset_name(params)
-
-        item_data = {
-            "index": index,
-            "params": params,
-            "pixmap": pixmap,
-            "suggested_name": suggested_name,
-        }
-        self.generated_data.append(item_data)
-
-        card = PresetCardWidget(
-            index=index,
-            params=params,
-            pixmap=pixmap,
-            suggested_name=suggested_name,
-            parent=self.grid_container,
+    def _on_item_ready(self, index: int, params: PlotParameters, image: QImage | QPixmap) -> None:
+        # The worker delivers QImage; QPixmap is created here in the GUI thread.
+        pixmap = QPixmap.fromImage(image) if isinstance(image, QImage) else image
+        self.model.append_item(
+            GalleryItem(
+                index=index,
+                params=params,
+                pixmap=pixmap,
+                suggested_name=suggest_preset_name(params),
+            )
         )
-        card.sig_favorite_toggled.connect(self._on_card_favorite_toggled)
-        self.card_widgets.append(card)
-
-        # Place into dynamic responsive grid
-        cols = max(1, getattr(self, "_current_cols", 4))
-        visible_idx = len([c for c in self.card_widgets if c.isVisible()]) - 1
-        row = max(0, visible_idx) // cols
-        col = max(0, visible_idx) % cols
-        self.grid_layout.addWidget(card, row, col)
-
-        # Ensure active columns stretch to fill viewport width
-        for c in range(cols):
-            self.grid_layout.setColumnStretch(c, 1)
-
-        self._update_counter()
 
     def _on_worker_finished(self) -> None:
         self.btn_generate.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.lbl_status.setText(f"Fertig! {len(self.card_widgets)} Varianten wurden generiert.")
-        self._relayout_grid()
+        self.lbl_status.setText(f"Fertig! {self.model.rowCount()} Varianten wurden generiert.")
         self._update_counter()
 
     def _on_worker_error(self, index: int, error_msg: str) -> None:
@@ -1065,69 +1211,36 @@ class PresetLabWindow(QMainWindow):
     # Card Management & Selection
     # -------------------------------------------------------------------------
 
-    def _clear_cards(self) -> None:
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            for card in self.card_widgets:
-                self.grid_layout.removeWidget(card)
-                card.deleteLater()
-            self.card_widgets.clear()
-            self.generated_data.clear()
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
-        self._update_counter()
-
-    def _on_card_favorite_toggled(self, index: int, is_fav: bool) -> None:
-        self._update_counter()
-        if self.btn_filter_favs.isChecked():
-            for card in self.card_widgets:
-                if card.index == index:
-                    card.setVisible(is_fav)
-            self._relayout_grid()
+    def _open_zoom(self, index: QPersistentModelIndex) -> None:
+        if not index.isValid():
+            return
+        dlg = ZoomModalDialog(
+            index.data(Qt.ItemDataRole.DecorationRole),
+            index.data(PARAMS_ROLE),
+            index.data(NAME_ROLE),
+            parent=self,
+        )
+        dlg.exec()
 
     def select_all_cards(self) -> None:
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            for card in self.card_widgets:
-                card.set_favorite(True)
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
-        self._update_counter()
+        self.model.set_all_favorites(True)
 
     def unselect_all_cards(self) -> None:
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            for card in self.card_widgets:
-                card.set_favorite(False)
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
-        self._update_counter()
+        self.model.set_all_favorites(False)
 
     def _filter_all_clicked(self) -> None:
         self.btn_filter_all.setChecked(True)
         self.btn_filter_favs.setChecked(False)
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            for card in self.card_widgets:
-                card.setVisible(True)
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
-        self._relayout_grid()
+        self.proxy.set_favorites_only(False)
 
     def _filter_favs_clicked(self) -> None:
         self.btn_filter_all.setChecked(False)
         self.btn_filter_favs.setChecked(True)
-        self.grid_container.setUpdatesEnabled(False)
-        try:
-            for card in self.card_widgets:
-                card.setVisible(card.is_favorite)
-        finally:
-            self.grid_container.setUpdatesEnabled(True)
-        self._relayout_grid()
+        self.proxy.set_favorites_only(True)
 
-    def _update_counter(self) -> None:
-        fav_count = sum(1 for c in self.card_widgets if c.is_favorite)
-        total = len(self.card_widgets)
+    def _update_counter(self, *_args) -> None:
+        fav_count = self.model.favorite_count()
+        total = self.model.rowCount()
         self.lbl_fav_counter.setText(f"{fav_count} von {total} gemerkt")
         self.btn_filter_favs.setText(f"Nur Gemerkte ({fav_count})")
         self.btn_save_favs.setText(f"💾  Gemerkte als Presets speichern ({fav_count})...")
@@ -1138,15 +1251,15 @@ class PresetLabWindow(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _open_save_dialog(self) -> None:
-        fav_items = []
-        for card in self.card_widgets:
-            if card.is_favorite:
-                fav_items.append({
-                    "index": card.index,
-                    "params": card.params,
-                    "pixmap": card.pixmap,
-                    "suggested_name": card.suggested_name,
-                })
+        fav_items = [
+            {
+                "index": it.index,
+                "params": it.params,
+                "pixmap": it.pixmap,
+                "suggested_name": it.suggested_name,
+            }
+            for it in self.model.favorite_items()
+        ]
 
         if not fav_items:
             return
