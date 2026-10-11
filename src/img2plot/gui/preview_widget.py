@@ -476,11 +476,39 @@ class PreviewWidget(QWidget):
 
     def set_preview_data(self, data: PreviewRenderData, force_fit: bool = False) -> None:
         """Forward background-computed preview data to canvas, preserving zoom if requested."""
-        is_first_load = self.canvas.result is None
+        old_result = self.canvas.result
+        is_first_load = old_result is None
+
+        # Capture relative viewport center before applying new result
+        if not is_first_load and old_result and old_result.width > 0 and old_result.height > 0:
+            old_w = float(old_result.width)
+            old_h = float(old_result.height)
+            widget_cx = self.canvas.width() / 2.0
+            widget_cy = self.canvas.height() / 2.0
+            norm_cx = (widget_cx - self.canvas.pan_offset.x()) / max(1e-6, self.canvas.zoom * old_w)
+            norm_cy = (widget_cy - self.canvas.pan_offset.y()) / max(1e-6, self.canvas.zoom * old_h)
+        else:
+            old_w, old_h = 0.0, 0.0
+            norm_cx, norm_cy = 0.5, 0.5
+
         self.canvas.set_preview_data(data)
 
         if force_fit or is_first_load or (not self.chk_keep_zoom.isChecked()):
             self.canvas.fit_to_view()
+        elif old_w > 0 and old_h > 0 and self.canvas.result:
+            new_w = float(self.canvas.result.width)
+            new_h = float(self.canvas.result.height)
+            if new_w > 0 and new_h > 0:
+                if abs(new_w - old_w) > 1.0:
+                    scale_adj = old_w / new_w
+                    self.canvas.zoom = max(0.05, min(self.canvas.zoom * scale_adj, 30.0))
+                    self.canvas.sig_zoom_changed.emit(self.canvas.zoom)
+                widget_cx = self.canvas.width() / 2.0
+                widget_cy = self.canvas.height() / 2.0
+                new_pan_x = widget_cx - (norm_cx * new_w * self.canvas.zoom)
+                new_pan_y = widget_cy - (norm_cy * new_h * self.canvas.zoom)
+                self.canvas.pan_offset = QPointF(new_pan_x, new_pan_y)
+                self.canvas.update()
 
     def set_result(self, result: EngineResult | PreviewRenderData, force_fit: bool = False) -> None:
         """Forward vectorization result to canvas, preserving zoom if requested."""
@@ -488,11 +516,38 @@ class PreviewWidget(QWidget):
             self.set_preview_data(result, force_fit=force_fit)
             return
 
-        is_first_load = self.canvas.result is None
+        old_result = self.canvas.result
+        is_first_load = old_result is None
+
+        if not is_first_load and old_result and old_result.width > 0 and old_result.height > 0:
+            old_w = float(old_result.width)
+            old_h = float(old_result.height)
+            widget_cx = self.canvas.width() / 2.0
+            widget_cy = self.canvas.height() / 2.0
+            norm_cx = (widget_cx - self.canvas.pan_offset.x()) / max(1e-6, self.canvas.zoom * old_w)
+            norm_cy = (widget_cy - self.canvas.pan_offset.y()) / max(1e-6, self.canvas.zoom * old_h)
+        else:
+            old_w, old_h = 0.0, 0.0
+            norm_cx, norm_cy = 0.5, 0.5
+
         self.canvas.set_result(result)
 
         if force_fit or is_first_load or (not self.chk_keep_zoom.isChecked()):
             self.canvas.fit_to_view()
+        elif old_w > 0 and old_h > 0 and self.canvas.result:
+            new_w = float(self.canvas.result.width)
+            new_h = float(self.canvas.result.height)
+            if new_w > 0 and new_h > 0:
+                if abs(new_w - old_w) > 1.0:
+                    scale_adj = old_w / new_w
+                    self.canvas.zoom = max(0.05, min(self.canvas.zoom * scale_adj, 30.0))
+                    self.canvas.sig_zoom_changed.emit(self.canvas.zoom)
+                widget_cx = self.canvas.width() / 2.0
+                widget_cy = self.canvas.height() / 2.0
+                new_pan_x = widget_cx - (norm_cx * new_w * self.canvas.zoom)
+                new_pan_y = widget_cy - (norm_cy * new_h * self.canvas.zoom)
+                self.canvas.pan_offset = QPointF(new_pan_x, new_pan_y)
+                self.canvas.update()
 
     def _on_mode_changed(self, index: int) -> None:
         modes = ["vector", "preprocess", "sobel", "overlay"]

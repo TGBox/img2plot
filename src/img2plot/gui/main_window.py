@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
         self.sidebar.sig_export_png_requested.connect(self.export_png_file)
         self.sidebar.sig_input_file_selected.connect(self.load_image)
         self.sidebar.sig_open_preset_lab.connect(self.open_preset_lab)
+        self.sidebar.sig_batch_export_requested.connect(self.open_batch_export_dialog)
 
     def _build_menus(self) -> None:
         menubar = self.menuBar()
@@ -136,6 +137,12 @@ class MainWindow(QMainWindow):
         act_export_png.setShortcut(QKeySequence("Ctrl+Shift+S"))
         act_export_png.triggered.connect(self.export_png_file)
         menu_file.addAction(act_export_png)
+
+        act_batch_export = QAction("📦 Stapel-Export (Presets)...", self)
+        act_batch_export.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        act_batch_export.setToolTip("Bild in mehreren Presets hintereinander berechnen und exportieren (Strg+Umschalt+E)")
+        act_batch_export.triggered.connect(self.open_batch_export_dialog)
+        menu_file.addAction(act_batch_export)
 
         menu_file.addSeparator()
 
@@ -220,6 +227,11 @@ class MainWindow(QMainWindow):
         act_export_png.setToolTip("Zeichnung als hochauflösendes PNG-Bild exportieren")
         act_export_png.triggered.connect(self.export_png_file)
         toolbar.addAction(act_export_png)
+
+        act_tb_batch = QAction("📦 Batch-Export", self)
+        act_tb_batch.setToolTip("Stapel-Export mit mehreren Presets (Strg+Umschalt+E)")
+        act_tb_batch.triggered.connect(self.open_batch_export_dialog)
+        toolbar.addAction(act_tb_batch)
 
         toolbar.addSeparator()
 
@@ -497,6 +509,21 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.critical(self, "Fehler beim Exportieren", f"Konnte PNG nicht exportieren:\n{e}")
+
+    def open_batch_export_dialog(self) -> None:
+        """Open the multi-preset batch export dialog."""
+        if not self.current_image_path or not os.path.isfile(self.current_image_path):
+            QMessageBox.information(
+                self,
+                "Kein Bild geladen",
+                "Bitte lade zuerst ein Bild, bevor du den Stapel-Export startest.",
+            )
+            return
+
+        from .batch_export_dialog import BatchExportDialog
+
+        dlg = BatchExportDialog(image_path=self.current_image_path, parent=self)
+        dlg.exec()
 
     def _show_about_dialog(self) -> None:
         QMessageBox.about(

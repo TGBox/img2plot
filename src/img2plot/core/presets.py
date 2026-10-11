@@ -6,7 +6,7 @@ Provides persistence for custom user presets in ~/.img2plot/presets.
 from __future__ import annotations
 import os
 import json
-from typing import Dict
+from typing import Dict, Optional, Set
 from .parameters import PlotParameters
 
 
@@ -341,6 +341,35 @@ def get_all_presets() -> Dict[str, PlotParameters]:
     merged = dict(DEFAULT_PRESETS)
     merged.update(list_user_presets())
     return merged
+
+
+def get_unique_preset_name(base_name: str, existing_names: Optional[set[str]] = None) -> str:
+    """Return a unique preset name by appending sequential numbering if name already exists.
+
+    Checks both existing_names (if provided) and presets on disk.
+    """
+    safe_base = "".join(c for c in base_name if c.isalnum() or c in (" ", "_", "-")).strip()
+    if not safe_base:
+        safe_base = "Preset"
+
+    # Gather known names
+    known: set[str] = set()
+    if existing_names is not None:
+        known.update(existing_names)
+    else:
+        known.update(DEFAULT_PRESETS.keys())
+        known.update(list_user_presets().keys())
+
+    if safe_base not in known:
+        return safe_base
+
+    # If already ends with a number like "Name 1", find base and next counter
+    counter = 1
+    candidate = f"{safe_base} {counter}"
+    while candidate in known:
+        counter += 1
+        candidate = f"{safe_base} {counter}"
+    return candidate
 
 
 def save_user_preset(name: str, params: PlotParameters) -> str:

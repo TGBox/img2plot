@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionSlider,
     QTabWidget,
+    QSizePolicy,
 )
 
 from ..core.parameters import PlotParameters
@@ -303,6 +304,7 @@ class SidebarWidget(QWidget):
     sig_export_png_requested = Signal()
     sig_input_file_selected = Signal(str)
     sig_open_preset_lab = Signal()
+    sig_batch_export_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -613,6 +615,11 @@ class SidebarWidget(QWidget):
         h_btn.addWidget(self.btn_export_png)
         layout.addLayout(h_btn)
 
+        self.btn_batch_export = QPushButton("📦  Batch-Export (Presets)...")
+        self.btn_batch_export.setToolTip("Mehrere oder alle Presets hintereinander berechnen und speichern.")
+        self.btn_batch_export.clicked.connect(self.sig_batch_export_requested.emit)
+        layout.addWidget(self.btn_batch_export)
+
         if parent_layout is not None:
             parent_layout.addWidget(box)
         elif hasattr(self, "layout_content"):
@@ -629,9 +636,28 @@ class SidebarWidget(QWidget):
         layout.setSpacing(6)
 
         layout.addWidget(QLabel("Gespeicherte Profile:"))
+
+        h_combo = QHBoxLayout()
+        h_combo.setSpacing(4)
+
+        self.btn_preset_prev = QPushButton("◀")
+        self.btn_preset_prev.setToolTip("Vorheriges Preset (Alt+Links)")
+        self.btn_preset_prev.setFixedWidth(32)
+        self.btn_preset_prev.clicked.connect(self._select_previous_preset)
+
         self.combo_presets = QComboBox()
+        self.combo_presets.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.combo_presets.currentTextChanged.connect(self._on_preset_selected)
-        layout.addWidget(self.combo_presets)
+
+        self.btn_preset_next = QPushButton("▶")
+        self.btn_preset_next.setToolTip("Nächstes Preset (Alt+Rechts)")
+        self.btn_preset_next.setFixedWidth(32)
+        self.btn_preset_next.clicked.connect(self._select_next_preset)
+
+        h_combo.addWidget(self.btn_preset_prev)
+        h_combo.addWidget(self.combo_presets)
+        h_combo.addWidget(self.btn_preset_next)
+        layout.addLayout(h_combo)
 
         h_btn = QHBoxLayout()
         self.btn_save_user_preset = QPushButton("Preset speichern...")
@@ -2549,12 +2575,33 @@ class SidebarWidget(QWidget):
         is_user_preset = curr not in DEFAULT_PRESETS
         self.btn_delete_preset.setEnabled(is_user_preset)
 
+    def _select_previous_preset(self) -> None:
+        """Cycle to the previous preset in the list."""
+        count = self.combo_presets.count()
+        if count <= 1:
+            return
+        curr_idx = self.combo_presets.currentIndex()
+        new_idx = (curr_idx - 1) % count
+        self.combo_presets.setCurrentIndex(new_idx)
+
+    def _select_next_preset(self) -> None:
+        """Cycle to the next preset in the list."""
+        count = self.combo_presets.count()
+        if count <= 1:
+            return
+        curr_idx = self.combo_presets.currentIndex()
+        new_idx = (curr_idx + 1) % count
+        self.combo_presets.setCurrentIndex(new_idx)
+
     def _on_preset_selected(self, preset_name: str) -> None:
         all_presets = get_all_presets()
         if preset_name in all_presets:
             p = all_presets[preset_name]
             p.input_path = self.edit_input.text().strip()
             p.output_path = self.edit_output.text().strip()
+            # Preserve user's configured preview resolution so zoom does not jump
+            if hasattr(self, "slider_preview_res"):
+                p.preview_max_dim = int(self.slider_preview_res.get_value())
             self.apply_parameters(p)
             self._update_preset_delete_button_state()
             self._update_accordion_badges()

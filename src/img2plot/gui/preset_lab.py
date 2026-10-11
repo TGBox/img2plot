@@ -67,7 +67,7 @@ from PySide6.QtWidgets import (
 
 from ..core.engine import PlotEngine, EngineResult
 from ..core.parameters import PlotParameters
-from ..core.presets import save_user_preset
+from ..core.presets import save_user_preset, get_unique_preset_name, list_user_presets
 from ..core.randomizer import (
     NON_CLASSIC_ARTISTIC_MODES,
     generate_random_parameters,
@@ -660,7 +660,7 @@ class PresetGalleryView(QListView):
 # -----------------------------------------------------------------------------
 
 class PresetSaveDialog(QDialog):
-    """Dialog allowing the user to review selected favorites, edit their names, and save as presets."""
+    """Dialog allowing the user to review selected favorites, view them large, edit names, and save as presets."""
 
     def __init__(
         self,
@@ -669,7 +669,7 @@ class PresetSaveDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Favoriten als Presets speichern")
-        self.resize(720, 520)
+        self.resize(860, 640)
         self.setStyleSheet(DARK_STYLESHEET)
         self.favorites = favorites
         self.saved_names: List[str] = []
@@ -687,7 +687,7 @@ class PresetSaveDialog(QDialog):
 
         desc_lbl = QLabel(
             "Vergib für jede ausgewählte Konfiguration einen passenden Namen.\n"
-            "Nach dem Speichern stehen die neuen Vorlagen sofort im Hauptprogramm zur Verfügung."
+            "Tipp: Klicke auf ein Bild oder die Lupe (🔍) bzw. doppelklicke auf eine Zeile, um die hochauflösende Großansicht zu öffnen."
         )
         desc_lbl.setStyleSheet("color: #a1a1aa; font-size: 13px;")
         layout.addWidget(desc_lbl)
@@ -695,38 +695,69 @@ class PresetSaveDialog(QDialog):
         # Table with selected cards
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Vorschau", "Preset-Name", "Stil / Eigenschaften", "Speichern"])
+        self.table.setHorizontalHeaderLabels(["Vorschau (Groß)", "Preset-Name", "Stil / Eigenschaften", "Speichern"])
         self.table.setRowCount(len(self.favorites))
         self.table.verticalHeader().setVisible(False)
-        self.table.setRowHeight(0, 72)
         self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.cellDoubleClicked.connect(self._on_table_cell_double_clicked)
 
         self.edit_fields: List[QLineEdit] = []
         self.save_checks: List[QCheckBox] = []
 
-        for row, item in enumerate(self.favorites):
-            self.table.setRowHeight(row, 72)
+        # Keep track of assigned names to avoid duplicates within the dialog and disk
+        existing_names: set[str] = set(list_user_presets().keys())
 
-            # 1. Thumbnail preview
+        for row, item in enumerate(self.favorites):
+            self.table.setRowHeight(row, 134)
+
+            # 1. Enlarged Thumbnail preview with clickable zoom button
+            thumb_container = QWidget()
+            thumb_lay = QHBoxLayout(thumb_container)
+            thumb_lay.setContentsMargins(6, 6, 6, 6)
+            thumb_lay.setSpacing(6)
+            thumb_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
             lbl_thumb = QLabel()
             lbl_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_thumb.setPixmap(
-                item["pixmap"].scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            lbl_thumb.setCursor(Qt.CursorShape.PointingHandCursor)
+            lbl_thumb.setToolTip("Klicken für hochauflösende Großansicht")
+            scaled_pix = item["pixmap"].scaled(
+                120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
-            self.table.setCellWidget(row, 0, lbl_thumb)
+            lbl_thumb.setPixmap(scaled_pix)
+            lbl_thumb.mousePressEvent = lambda ev, r=row: self._open_zoom_for_row(r)
+            thumb_lay.addWidget(lbl_thumb)
 
-            # 2. Name input
-            edit = QLineEdit(item["suggested_name"])
-            edit.setStyleSheet("padding: 6px; font-size: 13px; font-weight: bold;")
+            btn_zoom = QPushButton("🔍")
+            btn_zoom.setToolTip("Bild in Großansicht öffnen")
+            btn_zoom.setFixedSize(30, 30)
+            btn_zoom.setStyleSheet(
+                "QPushButton { background-color: #27272a; border-radius: 4px; font-size: 13px; }"
+                "QPushButton:hover { background-color: #38bdf8; color: #000; }"
+            )
+            btn_zoom.clicked.connect(lambda _, r=row: self._open_zoom_for_row(r))
+            thumb_lay.addWidget(btn_zoom)
+
+            self.table.setCellWidget(row, 0, thumb_container)
+
+            # 2. Name input with automatic conflict-free numbering
+            base_suggested = item.get("suggested_name") or "Mein Stil"
+            unique_name = get_unique_preset_name(base_suggested, existing_names=existing_names)
+            existing_names.add(unique_name)
+
+            edit = QLineEdit(unique_name)
+            edit.setStyleSheet("padding: 8px; font-size: 13px; font-weight: bold;")
             self.edit_fields.append(edit)
             self.table.setCellWidget(row, 1, edit)
 
             # 3. Details description
             params: PlotParameters = item["params"]
             style_str = params.artistic_mode if params.artistic_mode != "none" else "Kontur"
-            info_txt = f"{style_str}\nFarbe: {params.stroke_color}"
+            info_txt = f"Stil: {style_str}\nFarbe: {params.stroke_color}\nStrich: {params.stroke_width_mm} mm"
+            if params.use_hatching:
+                info_txt += "\n(Schraffur aktiv)"
             lbl_detail = QLabel(info_txt)
-            lbl_detail.setStyleSheet("color: #a1a1aa; font-size: 12px;")
+            lbl_detail.setStyleSheet("color: #a1a1aa; font-size: 12px; padding: 4px;")
             self.table.setCellWidget(row, 2, lbl_detail)
 
             # 4. Checkbox
@@ -740,9 +771,9 @@ class PresetSaveDialog(QDialog):
             self.save_checks.append(chk)
             self.table.setCellWidget(row, 3, chk_container)
 
-        self.table.setColumnWidth(0, 80)
-        self.table.setColumnWidth(1, 320)
-        self.table.setColumnWidth(2, 180)
+        self.table.setColumnWidth(0, 175)
+        self.table.setColumnWidth(1, 330)
+        self.table.setColumnWidth(2, 230)
         self.table.setColumnWidth(3, 80)
 
         layout.addWidget(self.table, 1)
@@ -778,9 +809,28 @@ class PresetSaveDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _open_zoom_for_row(self, row: int) -> None:
+        """Open high-resolution ZoomModalDialog for the selected row."""
+        if 0 <= row < len(self.favorites):
+            item = self.favorites[row]
+            current_name = self.edit_fields[row].text().strip() or item.get("suggested_name", "Preset")
+            dlg = ZoomModalDialog(
+                pixmap=item["pixmap"],
+                params=item["params"],
+                title=current_name,
+                parent=self,
+            )
+            dlg.exec()
+
+    def _on_table_cell_double_clicked(self, row: int, col: int) -> None:
+        """Allow double clicking anywhere on a row to open the large zoom modal."""
+        self._open_zoom_for_row(row)
+
     def _save_presets(self) -> None:
+        """Save checked items to user presets, with collision and overwrite protection."""
         saved_count = 0
         self.saved_names = []
+        existing_on_disk = list_user_presets()
 
         for row, item in enumerate(self.favorites):
             if not self.save_checks[row].isChecked():
@@ -788,11 +838,28 @@ class PresetSaveDialog(QDialog):
 
             name = self.edit_fields[row].text().strip()
             if not name:
-                name = item["suggested_name"]
+                name = item.get("suggested_name") or f"Preset {row + 1}"
+
+            # Check if overwriting an existing preset
+            if name in existing_on_disk:
+                reply = QMessageBox.question(
+                    self,
+                    "Preset überschreiben?",
+                    f"Das Preset '{name}' existiert bereits auf der Festplatte.\n\n"
+                    "Möchtest du die existierende Datei mit dieser Konfiguration überschreiben?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Cancel:
+                    return
+                if reply == QMessageBox.StandardButton.No:
+                    # Skip this preset
+                    continue
 
             params: PlotParameters = item["params"]
             safe_name = save_user_preset(name, params)
             self.saved_names.append(safe_name)
+            existing_on_disk[safe_name] = params
             saved_count += 1
 
         if saved_count > 0:
@@ -806,8 +873,8 @@ class PresetSaveDialog(QDialog):
         else:
             QMessageBox.warning(
                 self,
-                "Keine Presets ausgewählt",
-                "Es wurde kein Preset zum Speichern markiert.",
+                "Keine Presets gespeichert",
+                "Es wurde kein Preset gespeichert.",
             )
 
 
